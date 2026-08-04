@@ -1,0 +1,192 @@
+#!/bin/bash
+# janitor — Mac developer housekeeper (Library-first)
+set -euo pipefail
+
+JANITOR_HOME="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+# shellcheck source=../lib/common.sh
+source "$JANITOR_HOME/lib/common.sh"
+# shellcheck source=../lib/cleaners.sh
+source "$JANITOR_HOME/lib/cleaners.sh"
+
+usage() {
+  cat <<'EOF'
+janitor — Mac developer housekeeper
+
+Never touches ~/Documents or ~/Downloads.
+Cleans ~/Library caches/logs/dev leftovers and known tool caches.
+
+Usage:
+  janitor clean [--dry-run] [--deep] [-v|--verbose]
+  janitor desktop [--deep]
+  janitor status
+  janitor log [--path]
+  janitor help
+
+Commands:
+  clean    Run cleanup tasks (always writes a session log)
+  desktop  Two-phase GUI: assess → you accept → clean
+  status   Disk + sizes of known reclaimable paths (sorted)
+  log      Show latest clean log (or --path only)
+  help     Show this help
+
+Options:
+  --dry-run   Measure and log what would be freed; delete nothing
+  --deep      Also clear larger Library/Caches app leftovers
+  -v, --verbose   Show command output
+
+Desktop button:
+  ./install.sh --desktop   # puts Janitor.app on your Desktop
+
+Logs:
+  ~/Library/Logs/janitor/clean-*.log
+  ~/Library/Logs/janitor/latest.log
+  ~/Library/Logs/janitor/history.tsv
+
+Examples:
+  janitor status
+  janitor clean --dry-run
+  janitor clean
+  janitor clean --deep
+  janitor desktop
+  janitor log
+EOF
+}
+
+cmd_status() {
+  echo "🧹 Janitor status"
+  echo
+  df_data
+  echo
+  ram_report
+  echo
+  echo "Reclaimable / notable sizes (Library + tool caches):"
+  report_sizes
+  echo
+  echo "Policy: ~/Documents and ~/Downloads are never touched."
+  local latest
+  latest="$(latest_log_path)"
+  if [[ -n "$latest" && -f "$latest" ]]; then
+    echo
+    echo "Last run:"
+    grep -E '^(Freed |df avail|Log:|# janitor)' "$latest" 2>/dev/null | sed 's/^/  /' \
+      || echo "  (see $latest)"
+  fi
+}
+
+cmd_log() {
+  local path_only=0
+  while [[ $# -gt 0 ]]; do
+    case "$1" in
+      --path) path_only=1 ;;
+      -h|--help) usage; return 0 ;;
+      *) die "unknown option: $1" ;;
+    esac
+    shift
+  done
+
+  local latest
+  latest="$(latest_log_path)"
+  if [[ -z "$latest" || ! -f "$latest" ]]; then
+    die "no logs yet — run: janitor clean --dry-run"
+  fi
+  # Resolve symlink for display
+  local real="$latest"
+  if [[ -L "$latest" ]]; then
+    real="$(readlink "$latest" 2>/dev/null || echo "$latest")"
+  fi
+  if [[ "$path_only" -eq 1 ]]; then
+    echo "$real"
+    return 0
+  fi
+  echo "Log: $real"
+  echo
+  cat "$latest"
+}
+
+cmd_clean() {
+  local dry_run=0 verbose=0 deep=0
+  while [[ $# -gt 0 ]]; do
+    case "$1" in
+      --dry-run) dry_run=1 ;;
+      --deep) deep=1 ;;
+      -v|--verbose) verbose=1 ;;
+      -h|--help) usage; return 0 ;;
+      *) die "unknown option: $1" ;;
+    esac
+    shift
+  done
+
+  DRY_RUN=$dry_run
+  VERBOSE=$verbose
+  DEEP=$deep
+  export DRY_RUN VERBOSE DEEP
+
+  local df_before
+  df_before="$(free_kb)"
+  log_init "clean"
+
+  log_echo "🧹 Developer cleanup"
+  if [[ "$DRY_RUN" -eq 1 ]]; then
+    log_echo "(dry-run — nothing will be deleted)"
+  fi
+  if [[ "$DEEP" -eq 1 ]]; then
+    log_echo "(deep profile enabled)"
+  fi
+  log_echo ""
+  # RAM before (sanemaker-style snapshot)
+  {
+    echo "# RAM before"
+    ram_report
+    echo
+  } | tee -a "$LOG_FILE"
+
+  run_all_cleaners
+
+  echo
+  if [[ "$DRY_RUN" -eq 1 ]]; then
+    log_echo "✅ Dry-run complete."
+  else
+    log_echo "✅ Cleanup complete."
+  fi
+  log_finish "$df_before"
+  echo
+  {
+    echo "# RAM after"
+    ram_report
+  } | tee -a "$LOG_FILE"
+  echo
+  df_data
+}
+
+cmd_desktop() {
+  local deep=0
+  while [[ $# -gt 0 ]]; do
+    case "$1" in
+      --deep) deep=1 ;;
+      -h|--help) usage; return 0 ;;
+      *) die "unknown option: $1" ;;
+    esac
+    shift
+  done
+  # janitor-desktop has its own Assess / Assess (deep) buttons;
+  # --deep pre-selects by setting env for a non-interactive hint — still uses GUI.
+  if [[ "$deep" -eq 1 ]]; then
+    export JANITOR_DESKTOP_DEEP=1
+  fi
+  exec "$JANITOR_HOME/bin/janitor-desktop"
+}
+
+main() {
+  local cmd="${1:-help}"
+  shift || true
+  case "$cmd" in
+    clean)   cmd_clean "$@" ;;
+    desktop) cmd_desktop "$@" ;;
+    status)  cmd_status "$@" ;;
+    log)     cmd_log "$@" ;;
+    help|-h|--help) usage ;;
+    *) die "unknown command: $cmd (try: janitor help)" ;;
+  esac
+}
+
+main "$@"

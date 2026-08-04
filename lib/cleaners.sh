@@ -185,10 +185,17 @@ clean_simctl() {
 
 clean_old_logs() {
   local logs_root="$HOME/Library/Logs"
+  local id="old_logs" label="Old Library/Logs (>14d)"
+
+  if ! should_run "$id"; then
+    log_skip "$id" "$label" "$(skip_reason_for "$id")" "$logs_root"
+    return 0
+  fi
+
   assert_safe_path "$logs_root" || return 0
 
   if [[ ! -d "$logs_root" ]]; then
-    log_skip "old_logs" "Old Library/Logs" "missing" "$logs_root"
+    log_skip "$id" "$label" "missing" "$logs_root"
     return 0
   fi
 
@@ -197,15 +204,15 @@ clean_old_logs() {
   ts="$(date -Iseconds 2>/dev/null || date)"
 
   if [[ "${DRY_RUN:-0}" -eq 1 ]]; then
-    # Estimate: size of files older than 14d excluding janitor/
     local estimate=0
     estimate="$(find "$logs_root" -type f -mtime +14 \
       ! -path "$logs_root/janitor/*" \
       -exec du -sk {} + 2>/dev/null | awk '{s+=$1} END {print s+0}')" || estimate=0
     freed="$estimate"
-    log_echo "• Old Library/Logs (>14d)  [dry-run]  would free ~$(fmt_kb "$freed")"
+    log_echo "• $label  [dry-run]  would free ~$(fmt_kb "$freed")"
     log_line "  path=$logs_root before_kb=$before after_kb=0 freed_kb=$freed status=dry-run"
-    history_append "$ts" "old_logs" "$logs_root" "$before" 0 "$freed" "dry-run"
+    history_append "$ts" "$id" "$logs_root" "$before" 0 "$freed" "dry-run"
+    assess_append "$id" "$label" "$freed" "dry-run"
     TOTAL_FREED_KB=$((TOTAL_FREED_KB + freed))
     TOTAL_TASKS=$((TOTAL_TASKS + 1))
     return 0
@@ -214,7 +221,6 @@ clean_old_logs() {
   find "$logs_root" -type f -mtime +14 \
     ! -path "$logs_root/janitor/*" \
     -delete 2>/dev/null || true
-  # Remove empty dirs left behind (not janitor)
   find "$logs_root" -mindepth 1 -type d -empty \
     ! -path "$logs_root/janitor" \
     ! -path "$logs_root/janitor/*" \
@@ -224,9 +230,10 @@ clean_old_logs() {
   freed=$(( before - after ))
   if [[ "$freed" -lt 0 ]]; then freed=0; fi
   status="ok"
-  log_echo "• Old Library/Logs (>14d)  freed $(fmt_kb "$freed")"
+  log_echo "• $label  freed $(fmt_kb "$freed")"
   log_line "  path=$logs_root before_kb=$before after_kb=$after freed_kb=$freed status=$status"
-  history_append "$ts" "old_logs" "$logs_root" "$before" "$after" "$freed" "$status"
+  history_append "$ts" "$id" "$logs_root" "$before" "$after" "$freed" "$status"
+  assess_append "$id" "$label" "$freed" "$status"
   TOTAL_FREED_KB=$((TOTAL_FREED_KB + freed))
   TOTAL_TASKS=$((TOTAL_TASKS + 1))
 }

@@ -1,12 +1,17 @@
 #!/bin/bash
-# janitor — Mac developer housekeeper (Library-first)
+# janitor — Mac developer housekeeper (Library-first, portable)
 set -euo pipefail
 
 JANITOR_HOME="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 # shellcheck source=../lib/common.sh
 source "$JANITOR_HOME/lib/common.sh"
+# shellcheck source=../lib/config.sh
+source "$JANITOR_HOME/lib/config.sh"
 # shellcheck source=../lib/cleaners.sh
 source "$JANITOR_HOME/lib/cleaners.sh"
+
+janitor_augment_path
+config_ensure
 
 usage() {
   cat <<'EOF'
@@ -16,39 +21,44 @@ Never touches ~/Documents or ~/Downloads.
 Cleans ~/Library caches/logs/dev leftovers and known tool caches.
 
 Usage:
-  janitor clean [--dry-run] [--deep] [-v|--verbose]
+  janitor clean [--dry-run] [--deep] [--only id,id,...] [-v]
   janitor desktop [--deep]
   janitor status
+  janitor tasks
+  janitor disable <task-id>
+  janitor enable <task-id>
   janitor log [--path]
   janitor help
 
 Commands:
-  clean    Run cleanup tasks (always writes a session log)
-  desktop  Two-phase GUI: assess → you accept → clean
-  status   Disk + sizes of known reclaimable paths (sorted)
-  log      Show latest clean log (or --path only)
-  help     Show this help
+  clean     Run cleanup (always writes a session log)
+  desktop   GUI: assess → pick tasks (opt-out) → clean
+  status    Disk, RAM, reclaimable sizes
+  tasks     List cleaners and enabled/disabled state
+  disable   Permanently opt out of a task (saved in config)
+  enable    Re-enable a previously disabled task
+  log       Show latest session log
+  help      Show this help
 
 Options:
-  --dry-run   Measure and log what would be freed; delete nothing
-  --deep      Also clear larger Library/Caches app leftovers
-  -v, --verbose   Show command output
+  --dry-run      Measure only; delete nothing
+  --deep         Include larger Library/Caches app leftovers
+  --only id,...  Run only these task ids (after assess selection)
+  -v, --verbose  Show command output
+
+Config (per user, portable):
+  ~/.config/janitor/disabled
 
 Desktop button:
-  ./install.sh --desktop   # puts Janitor.app on your Desktop
-
-Logs:
-  ~/Library/Logs/janitor/clean-*.log
-  ~/Library/Logs/janitor/latest.log
-  ~/Library/Logs/janitor/history.tsv
+  ./install.sh --desktop
 
 Examples:
   janitor status
+  janitor tasks
+  janitor disable playwright
   janitor clean --dry-run
-  janitor clean
-  janitor clean --deep
   janitor desktop
-  janitor log
+  janitor clean --only homebrew,npm,old_logs
 EOF
 }
 
@@ -63,6 +73,7 @@ cmd_status() {
   report_sizes
   echo
   echo "Policy: ~/Documents and ~/Downloads are never touched."
+  echo "Opt-outs: $JANITOR_DISABLED_FILE  (janitor tasks)"
   local latest
   latest="$(latest_log_path)"
   if [[ -n "$latest" && -f "$latest" ]]; then
@@ -89,7 +100,6 @@ cmd_log() {
   if [[ -z "$latest" || ! -f "$latest" ]]; then
     die "no logs yet — run: janitor clean --dry-run"
   fi
-  # Resolve symlink for display
   local real="$latest"
   if [[ -L "$latest" ]]; then
     real="$(readlink "$latest" 2>/dev/null || echo "$latest")"
@@ -104,11 +114,19 @@ cmd_log() {
 }
 
 cmd_clean() {
-  local dry_run=0 verbose=0 deep=0
+  local dry_run=0 verbose=0 deep=0 only=""
   while [[ $# -gt 0 ]]; do
     case "$1" in
       --dry-run) dry_run=1 ;;
       --deep) deep=1 ;;
+      --only)
+        shift
+        [[ $# -gt 0 ]] || die "--only needs a comma-separated id list"
+        only="$1"
+        ;;
+      --only=*)
+        only="${1#--only=}"
+        ;;
       -v|--verbose) verbose=1 ;;
       -h|--help) usage; return 0 ;;
       *) die "unknown option: $1" ;;
@@ -119,7 +137,8 @@ cmd_clean() {
   DRY_RUN=$dry_run
   VERBOSE=$verbose
   DEEP=$deep
-  export DRY_RUN VERBOSE DEEP
+  JANITOR_ONLY="$only"
+  export DRY_RUN VERBOSE DEEP JANITOR_ONLY
 
   local df_before
   df_before="$(free_kb)"
@@ -132,8 +151,10 @@ cmd_clean() {
   if [[ "$DEEP" -eq 1 ]]; then
     log_echo "(deep profile enabled)"
   fi
+  if [[ -n "$JANITOR_ONLY" ]]; then
+    log_echo "(only: $JANITOR_ONLY)"
+  fi
   log_echo ""
-  # RAM before (sanemaker-style snapshot)
   {
     echo "# RAM before"
     ram_report
@@ -168,12 +189,29 @@ cmd_desktop() {
     esac
     shift
   done
-  # janitor-desktop has its own Assess / Assess (deep) buttons;
-  # --deep pre-selects by setting env for a non-interactive hint — still uses GUI.
   if [[ "$deep" -eq 1 ]]; then
     export JANITOR_DESKTOP_DEEP=1
   fi
   exec "$JANITOR_HOME/bin/janitor-desktop"
+}
+
+cmd_tasks() {
+  list_tasks
+}
+
+cmd_disable() {
+  [[ $# -ge 1 ]] || die "usage: janitor disable <task-id>"
+  local id="$1" known=0 t
+  for t in "${JANITOR_TASK_IDS[@]}"; do
+    [[ "$t" == "$id" ]] && known=1 && break
+  done
+  [[ "$known" -eq 1 ]] || die "unknown task id: $id (try: janitor tasks)"
+  task_disable "$id"
+}
+
+cmd_enable() {
+  [[ $# -ge 1 ]] || die "usage: janitor enable <task-id>"
+  task_enable "$1"
 }
 
 main() {
@@ -183,6 +221,9 @@ main() {
     clean)   cmd_clean "$@" ;;
     desktop) cmd_desktop "$@" ;;
     status)  cmd_status "$@" ;;
+    tasks)   cmd_tasks "$@" ;;
+    disable) cmd_disable "$@" ;;
+    enable)  cmd_enable "$@" ;;
     log)     cmd_log "$@" ;;
     help|-h|--help) usage ;;
     *) die "unknown command: $cmd (try: janitor help)" ;;

@@ -11,10 +11,23 @@ Mac development housekeeper. Reclaims disk from **`~/Library`** caches/logs/dev 
 Puts **Janitor.app** on your Desktop. Double-click:
 
 1. **Assess** (or Assess deep) — dry-run; nothing deleted  
-2. Review the summary dialog  
-3. **Clean now** — only then does cleanup run  
+2. **Uncheck** anything you want to keep (multi-select list)  
+3. Confirm → **Clean now** runs only what stayed checked  
 
-Cancel at either step leaves the disk untouched. Same flow from the terminal: `janitor desktop`.
+Optional: “Remember” deselections → saved in `~/.config/janitor/disabled` for next time.
+
+Same flow from the terminal: `janitor desktop`.
+
+## Opt out of tasks
+
+```bash
+janitor tasks                 # list ids + enabled/disabled
+janitor disable playwright    # never clean this (until re-enabled)
+janitor enable playwright
+janitor clean --only homebrew,npm,old_logs
+```
+
+Config is per-user and portable: `~/.config/janitor/disabled` (see `config/disabled.example`).
 
 ## Sacrosanct
 
@@ -32,7 +45,8 @@ Ensure `~/bin` is on your `PATH`, then:
 
 ```bash
 janitor status              # disk + reclaimable sizes (sorted)
-janitor desktop             # GUI two-phase clean
+janitor desktop             # GUI: assess → opt-out → clean
+janitor tasks               # enable/disable list
 janitor clean --dry-run     # preview + write log (no deletes)
 janitor clean               # clean + always log what/how much
 janitor clean --deep        # + larger Library/Caches app leftovers
@@ -82,10 +96,14 @@ Still never touches Documents/Downloads, Docker.raw, full Cursor Application Sup
 
 ```
 bin/janitor
-lib/common.sh      # logging, assert_safe_path, run_path_task / run_cmd_task
-lib/cleaners.sh    # allowlisted tasks
+bin/janitor-desktop   # assess → checkbox opt-out → clean
+lib/common.sh
+lib/config.sh         # ~/.config/janitor + portable PATH
+lib/cleaners.sh
+config/disabled.example
 install.sh
-launchd/com.susssus.janitor.plist
+launchd/…
+desktop/              # app builder + icon
 ```
 
 ## Schedule

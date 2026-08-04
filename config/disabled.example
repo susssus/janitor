@@ -1,0 +1,9 @@
+# Janitor — permanently disabled task ids (one per line)
+# This file lives at: ~/.config/janitor/disabled
+# Copy patterns from here, or use: janitor disable <id> / janitor enable <id>
+#
+# Example opt-outs:
+# playwright
+# pub_cache
+# steam
+# canva

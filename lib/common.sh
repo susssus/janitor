@@ -3,13 +3,13 @@
 
 JANITOR_LOG_DIR="${JANITOR_LOG_DIR:-$HOME/Library/Logs/janitor}"
 JANITOR_HISTORY="$JANITOR_LOG_DIR/history.tsv"
+JANITOR_ASSESS_TSV="$JANITOR_LOG_DIR/last-assess.tsv"
 
 # Sacrosanct — never touch
 SACROSANCT_DIRS=(
   "$HOME/Documents"
   "$HOME/Downloads"
 )
-
 die() {
   echo "janitor: $*" >&2
   exit 1
@@ -115,13 +115,15 @@ log_init() {
   TOTAL_FREED_KB=0
   TOTAL_TASKS=0
   : >"$LOG_FILE"
+  # Fresh assess sheet for checkbox UI / --only selection
+  printf 'id\tlabel\tfreed_kb\tstatus\n' >"$JANITOR_ASSESS_TSV"
   if [[ ! -f "$JANITOR_HISTORY" ]]; then
     printf 'timestamp\ttask_id\tpath\tbefore_kb\tafter_kb\tfreed_kb\tstatus\n' >"$JANITOR_HISTORY"
   fi
   {
     echo "# janitor ${mode}  $(date -Iseconds 2>/dev/null || date)"
     echo "# host=$(hostname -s 2>/dev/null || hostname)  user=$USER"
-    echo "# dry_run=${DRY_RUN:-0}  deep=${DEEP:-0}"
+    echo "# dry_run=${DRY_RUN:-0}  deep=${DEEP:-0}  only=${JANITOR_ONLY:--}"
     echo "#"
   } >>"$LOG_FILE"
   ln -sfn "$LOG_FILE" "$JANITOR_LOG_DIR/latest.log"
@@ -144,6 +146,12 @@ history_append() {
   ts="$1"; task_id="$2"; path="$3"; before="$4"; after="$5"; freed="$6"; status="$7"
   printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\n' \
     "$ts" "$task_id" "$path" "$before" "$after" "$freed" "$status" >>"$JANITOR_HISTORY"
+}
+
+# Record a selectable assess row (for desktop checkboxes)
+assess_append() {
+  local id="$1" label="$2" freed="$3" status="$4"
+  printf '%s\t%s\t%s\t%s\n' "$id" "$label" "$freed" "$status" >>"$JANITOR_ASSESS_TSV"
 }
 
 # Remove a path tree after safety check
@@ -171,6 +179,11 @@ run_path_task() {
   local id="$1" label="$2" path="$3" mode="${4:-remove}"
   local before after freed status ts
 
+  if ! should_run "$id"; then
+    log_skip "$id" "$label" "$(skip_reason_for "$id")" "$path"
+    return 0
+  fi
+
   if ! assert_safe_path "$path"; then
     log_echo "• $label  (refused — unsafe path)"
     history_append "$(date -Iseconds 2>/dev/null || date)" "$id" "$path" 0 0 0 "refused"
@@ -193,6 +206,7 @@ run_path_task() {
     log_echo "• $label  [dry-run]  would free $(fmt_kb "$freed")"
     log_line "  path=$path before_kb=$before after_kb=$after freed_kb=$freed status=$status"
     history_append "$ts" "$id" "$path" "$before" "$after" "$freed" "$status"
+    assess_append "$id" "$label" "$freed" "$status"
     TOTAL_FREED_KB=$((TOTAL_FREED_KB + freed))
     TOTAL_TASKS=$((TOTAL_TASKS + 1))
     return 0
@@ -211,6 +225,7 @@ run_path_task() {
   log_echo "• $label  freed $(fmt_kb "$freed")"
   log_line "  path=$path before_kb=$before after_kb=$after freed_kb=$freed status=$status"
   history_append "$ts" "$id" "$path" "$before" "$after" "$freed" "$status"
+  assess_append "$id" "$label" "$freed" "$status"
   TOTAL_FREED_KB=$((TOTAL_FREED_KB + freed))
   TOTAL_TASKS=$((TOTAL_TASKS + 1))
 }
@@ -222,6 +237,11 @@ run_cmd_task() {
   local id="$1" label="$2" measure_path="$3"
   shift 3
   local before=0 after=0 freed=0 status ts
+
+  if ! should_run "$id"; then
+    log_skip "$id" "$label" "$(skip_reason_for "$id")" "${measure_path:--}"
+    return 0
+  fi
 
   if [[ -n "$measure_path" ]]; then
     if ! assert_safe_path "$measure_path"; then
@@ -244,6 +264,7 @@ run_cmd_task() {
     fi
     log_line "  path=${measure_path:--} before_kb=$before after_kb=0 freed_kb=$freed status=$status cmd=$*"
     history_append "$ts" "$id" "${measure_path:--}" "$before" 0 "$freed" "$status"
+    assess_append "$id" "$label" "$freed" "$status"
     TOTAL_FREED_KB=$((TOTAL_FREED_KB + freed))
     TOTAL_TASKS=$((TOTAL_TASKS + 1))
     return 0
@@ -268,6 +289,7 @@ run_cmd_task() {
   fi
   log_line "  path=${measure_path:--} before_kb=$before after_kb=$after freed_kb=$freed status=$status cmd=$*"
   history_append "$ts" "$id" "${measure_path:--}" "$before" "$after" "$freed" "$status"
+  assess_append "$id" "$label" "$freed" "$status"
   TOTAL_FREED_KB=$((TOTAL_FREED_KB + freed))
   TOTAL_TASKS=$((TOTAL_TASKS + 1))
 }

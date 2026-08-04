@@ -25,7 +25,7 @@ if [[ ":$PATH:" != *":$BIN_DIR:"* ]]; then
   echo '  echo '\''export PATH="$HOME/bin:$PATH"'\'' >> ~/.zshrc && source ~/.zshrc'
 fi
 
-# Build a PATH suitable for unattended launchd runs
+# Build a PATH suitable for unattended launchd runs (portable; no hard-coded user homes)
 build_launchd_path() {
   local parts=()
   parts+=(/opt/homebrew/bin /usr/local/bin /usr/bin /bin /usr/sbin /sbin)
@@ -35,9 +35,22 @@ build_launchd_path() {
   if [[ -n "${nvm_node:-}" ]]; then
     parts+=("$nvm_node")
   fi
-  if [[ -d "$HOME/development/flutter/bin" ]]; then
-    parts+=("$HOME/development/flutter/bin")
-  fi
+  [[ -d "$HOME/.asdf/shims" ]] && parts+=("$HOME/.asdf/shims")
+  # Flutter: probe common locations (works for any user layout)
+  local d
+  for d in \
+    "$HOME/flutter/bin" \
+    "$HOME/development/flutter/bin" \
+    "$HOME/sdk/flutter/bin" \
+    "$HOME/src/flutter/bin" \
+    "$HOME/tools/flutter/bin" \
+    "/opt/flutter/bin"
+  do
+    if [[ -x "$d/flutter" ]]; then
+      parts+=("$d")
+      break
+    fi
+  done
   local IFS=:
   echo "${parts[*]}"
 }

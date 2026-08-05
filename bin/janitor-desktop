@@ -43,10 +43,53 @@ notify() {
   osascript -e "display notification \"$(osascript_escape "$body")\" with title \"$(osascript_escape "$title")\"" 2>/dev/null || true
 }
 
+SWEEP_ANIM_PID=""
+
+# Cycle 🧹 frames in Notification Center while a blocking clean/assess runs.
+sweep_anim_start() {
+  local phase="${1:-Sweeping}"
+  (
+    local frames=("🧹" "🧹 💨" "💨 🧹" "✨ 🧹")
+    local i=0 n=${#frames[@]}
+    while true; do
+      notify "${frames[$i]} Janitor" "${phase} underway…"
+      i=$(( (i + 1) % n ))
+      sleep 0.75
+    done
+  ) &
+  SWEEP_ANIM_PID=$!
+}
+
+sweep_anim_stop() {
+  [[ -z "${SWEEP_ANIM_PID:-}" ]] && return 0
+  kill "$SWEEP_ANIM_PID" 2>/dev/null || true
+  wait "$SWEEP_ANIM_PID" 2>/dev/null || true
+  SWEEP_ANIM_PID=""
+}
+
+trap 'sweep_anim_stop' EXIT
+
+# Task bullet lines from a session log (• npm cache  freed 1.2G …).
+log_task_summary() {
+  local logfile="$1"
+  local max="${2:-15}"
+  if [[ ! -f "$logfile" ]]; then
+    echo "(no log yet)"
+    return 0
+  fi
+  local lines
+  lines="$(grep -E '^• ' "$logfile" 2>/dev/null | tail -n "$max")"
+  if [[ -z "$lines" ]]; then
+    echo "(no task lines)"
+  else
+    printf '%s\n' "$lines"
+  fi
+}
+
 alert() {
   local message="$1"
   osascript <<EOF
-display dialog "$(osascript_escape "$message")" with title "Janitor" buttons {"OK"} default button "OK" with icon note
+display dialog "$(osascript_escape "$message")" with title "🧹 Janitor" buttons {"OK"} default button "OK" with icon note
 EOF
 }
 
@@ -182,10 +225,11 @@ case "$choice" in
   *) DEEP_FLAG=() ;;
 esac
 
-notify "Janitor" "Assessing what can be cleaned…"
+sweep_anim_start "Assessing"
 
 # --- Phase 1: assess ---
 assess_out="$("$JANITOR_BIN" clean --dry-run "${DEEP_FLAG[@]}" 2>&1)" || true
+sweep_anim_stop
 assess_log="$("$JANITOR_BIN" log --path 2>/dev/null || true)"
 freed_line="$(printf '%s\n' "$assess_out" | grep -E '^Freed \(measured\):' | tail -1 || true)"
 [[ -z "$freed_line" ]] && freed_line="Freed (measured): unknown"
@@ -199,7 +243,7 @@ case "$selected" in
     ;;
   EMPTY)
     none_log="${assess_log:-none}"
-    alert "Nothing reclaimable right now.
+    alert "🧹 Nothing to sweep right now.
 
 ${freed_line}
 
@@ -230,18 +274,23 @@ case "$confirm" in
 esac
 
 # --- Phase 2 ---
-notify "Janitor" "Cleaning selected tasks…"
+sweep_anim_start "Sweeping"
 clean_out="$("$JANITOR_BIN" clean "${DEEP_FLAG[@]}" --only "$selected" 2>&1)" || true
+sweep_anim_stop
 clean_log="$("$JANITOR_BIN" log --path 2>/dev/null || true)"
 result_line="$(printf '%s\n' "$clean_out" | grep -E '^Freed \(measured\):' | tail -1 || true)"
 [[ -z "$result_line" ]] && result_line="Cleanup finished."
 none_log="${clean_log:-none}"
+log_summary="$(log_task_summary "$clean_log")"
 
-alert "Cleanup complete.
+alert "🧹 Hooray! Cleanup complete.
 
 ${result_line}
 
-Log:
+Swept:
+${log_summary}
+
+Full log:
 ${none_log}"
 
-notify "Janitor" "${result_line}"
+notify "🧹 Janitor" "Hooray! ${result_line}"

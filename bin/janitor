@@ -26,7 +26,7 @@ Usage:
   janitor status
   janitor hogs
   janitor discover
-  janitor educate <id>
+  janitor educate <id|ram>
   janitor adopt <id>
   janitor hog add <path> [remove|contents]
   janitor tasks
@@ -41,7 +41,7 @@ Commands:
   status    Disk, RAM, reclaimable hogs (one 🐗 row each)
   hogs      List catalog + custom hogs and state
   discover  Suggest off/brave/disabled hogs present on disk
-  educate   Longer explanation for one hog (📖)
+  educate   Longer explanation for one hog, or: janitor educate ram
   adopt     Opt into a catalog hog (saved in ~/.config/janitor/hogs)
   hog add   Add a custom allowlisted cache path as a hog
   tasks     List cleaners and enabled/disabled/off/brave state
@@ -84,14 +84,17 @@ cmd_status() {
   section "Disk"
   df_data
   echo
-  section "RAM"
+  explain_ram_vs_disk full
+  echo
+  section "RAM (snapshot only — not cleaned by Janitor)"
   ram_report
   echo
-  section "Hogs (reclaimable)"
+  section "Hogs (reclaimable disk)"
   report_sizes
   echo
-  echo "${C_DIM}Policy: dev caches only — never Documents, Downloads, or media.${C_RESET}"
+  echo "${C_DIM}Policy: never Documents or Downloads. Brave tier = browsers/media caches.${C_RESET}"
   echo "${C_DIM}Opt-outs: ${JANITOR_DISABLED_FILE}  ·  Hogs: ${JANITOR_HOGS_FILE}${C_RESET}"
+  echo "${C_DIM}More: janitor educate ram${C_RESET}"
   local latest
   latest="$(latest_log_path)"
   if [[ -n "$latest" && -f "$latest" ]]; then
@@ -102,7 +105,7 @@ cmd_status() {
       real="$(readlink "$latest" 2>/dev/null || echo "$latest")"
     fi
     echo "  ${C_DIM}${real}${C_RESET}"
-    grep -E '^(Freed |df avail|Log:|# janitor|☆|── summary)' "$latest" 2>/dev/null | sed 's/^/  /' \
+    grep -E '^(Disk freed |Freed |df avail|Log:|# janitor|☆|── summary)' "$latest" 2>/dev/null | sed 's/^/  /' \
       || echo "  (see $real)"
   fi
 }
@@ -275,7 +278,7 @@ main() {
     hogs)     cmd_hogs "$@" ;;
     discover) cmd_discover "$@" ;;
     educate)
-      [[ $# -ge 1 ]] || die "usage: janitor educate <id>"
+      [[ $# -ge 1 ]] || die "usage: janitor educate <id|ram>"
       cmd_educate "$1"
       ;;
     adopt)

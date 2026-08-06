@@ -623,10 +623,19 @@ cmd_discover() {
 
 cmd_educate() {
   local id="$1"
-  [[ -n "$id" ]] || { echo "usage: janitor educate <id>" >&2; return 1; }
+  [[ -n "$id" ]] || { echo "usage: janitor educate <id|ram|disk>" >&2; return 1; }
+  case "$id" in
+    ram|memory|disk|hogs|ram-vs-disk|disk-vs-ram)
+      banner "Educate me — disk hogs vs RAM hogs" "📖"
+      echo
+      explain_ram_vs_disk full
+      echo
+      return 0
+      ;;
+  esac
   local idx label because swipe edu
   idx="$(task_index "$id" 2>/dev/null || true)"
-  [[ -n "$idx" ]] || { echo "janitor: unknown hog id: $id" >&2; return 1; }
+  [[ -n "$idx" ]] || { echo "janitor: unknown hog id: $id (or try: janitor educate ram)" >&2; return 1; }
   label="$(task_label "$id")"
   because="$(task_hogging_because "$id")"
   swipe="$(task_if_you_swipe "$id")"
@@ -641,6 +650,8 @@ cmd_educate() {
   else
     echo "(no longer explanation for this hog yet)"
   fi
+  echo
+  explain_ram_vs_disk short
   echo
 }
 

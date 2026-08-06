@@ -222,9 +222,9 @@ final class Hud: NSObject, NSApplicationDelegate {
     func buildWelcome() {
         welcomeBox = NSView(frame: NSRect(x: 0, y: 0, width: winW, height: winH - 170))
         let blurb = label(
-            "Dev caches by default. Never Documents or Downloads.\nBrave/Stupid adds browsers & media caches.",
-            frame: NSRect(x: 40, y: 200, width: winW - 80, height: 44),
-            size: 12,
+            "Janitor sweeps disk hogs (cache files) — not RAM.\nQuit apps to free memory. Never Documents or Downloads.",
+            frame: NSRect(x: 36, y: 198, width: winW - 72, height: 44),
+            size: 11,
             bold: false
         )
         blurb.textColor = NSColor(calibratedWhite: 0.7, alpha: 1)

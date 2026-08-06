@@ -1,8 +1,10 @@
 # Janitor
 
-Mac **developer** housekeeper. Reclaims disk from known **dev tool** caches (`~/.gradle`, `~/.npm`, `~/.pub-cache`, Xcode DerivedData, …) and regenerable leftovers under `~/Library`.
+Mac **developer** housekeeper. Reclaims **disk** from known tool caches (`~/.gradle`, `~/.npm`, Xcode DerivedData, …) and regenerable leftovers under `~/Library`.
 
-**Never** touches `~/Documents`, `~/Downloads`, media apps, games, or other personal files. Other tools own those.
+**Disk hogs vs RAM hogs:** Janitor sweeps *disk* hogs — cache files that sit on your SSD and free gigabytes when cleared. *RAM* hogs are apps holding memory right now; quit them (or restart) to free RAM. Deleting a cache folder does not empty memory. `janitor status` shows a RAM snapshot for pressure awareness only — it is not a RAM cleaner. Try `janitor educate ram`.
+
+**Never** touches `~/Documents`, `~/Downloads`. Brave/Stupid mode can add browser/media *caches* (still never Documents/Downloads).
 
 ## Hogs
 
@@ -104,7 +106,7 @@ Each task records path, before/after KB, freed KB, and status. The summary uses 
 | Old logs | `~/Library/Logs` files older than 14 days (keeps `janitor/`) |
 | Cursor | `~/Library/Caches/Cursor` only (not Application Support) |
 
-`status` and each `clean` also print a **RAM snapshot** (available-ish, compressed, wired, memory free %, top RSS). Disk view prefers `/System/Volumes/Data`.
+`status` prints disk, a short **disk vs RAM** primer, a **RAM snapshot** (not cleaned), then reclaimable disk hogs. Disk view prefers `/System/Volumes/Data`.
 
 ## `--deep` and `--brave` / `--stupid`
 

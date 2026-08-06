@@ -532,3 +532,21 @@ df_data() {
     df -h ~
   fi
 }
+
+# Friendly RAM vs disk hog primer (status, educate, done screen)
+explain_ram_vs_disk() {
+  local mode="${1:-full}" # full | short
+  if [[ "$mode" == "short" ]]; then
+    c_or_log "${C_DIM}Disk hogs = files on disk (Janitor sweeps these). RAM hogs = apps holding memory now (quit apps / restart — cache deletes don't empty RAM).${C_RESET}"
+    return 0
+  fi
+  section "Disk hogs vs RAM hogs"
+  c_or_log "Disk hogs are files sitting on your SSD — npm caches, DerivedData, browser caches, stream buffers."
+  c_or_log "Sweeping them frees gigabytes you can measure. That is what Janitor is for."
+  c_or_log ""
+  c_or_log "RAM hogs are processes holding memory right now — Chrome tabs, IDEs, emulators."
+  c_or_log "Quitting apps (or restarting) frees RAM. Deleting a cache folder does not pour memory back into the stick."
+  c_or_log ""
+  c_or_log "${C_DIM}Janitor's RAM section is a snapshot so you can see pressure. It is not a RAM cleaner.${C_RESET}"
+}
+

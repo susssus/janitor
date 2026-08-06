@@ -111,7 +111,10 @@ hud_stop() {
 trap 'dbg "EXIT trap"; hud_stop' EXIT
 
 # Wait for next HUD event (start / start_deep / cancel / sweep … / ok).
+# IMPORTANT: must not run under command substitution — EVENT_QUEUE / EVENTS_OFFSET
+# live in this shell. Callers use: hud_next_event; event="$HUD_EVENT"
 EVENT_QUEUE=()
+HUD_EVENT=""
 
 hud_poll_events() {
   local events="$HUD_SESSION/events"
@@ -133,14 +136,15 @@ hud_poll_events() {
 }
 
 hud_next_event() {
+  HUD_EVENT=""
   while true; do
     if [[ ${#EVENT_QUEUE[@]} -gt 0 ]]; then
-      printf '%s\n' "${EVENT_QUEUE[0]}"
+      HUD_EVENT="${EVENT_QUEUE[0]}"
       EVENT_QUEUE=("${EVENT_QUEUE[@]:1}")
       return 0
     fi
     if ! kill -0 "$HUD_PID" 2>/dev/null; then
-      echo "cancel"
+      HUD_EVENT="cancel"
       return 0
     fi
     hud_poll_events
@@ -149,6 +153,12 @@ hud_next_event() {
     fi
     sleep 0.05
   done
+}
+
+# Drop any stale events left over from a previous phase (e.g. duplicate clicks).
+hud_drain_events() {
+  hud_poll_events
+  EVENT_QUEUE=()
 }
 
 # Stream janitor output into HUD log lines; also tee to a capture file.
@@ -218,7 +228,8 @@ dbg "HUD=$JANITOR_HUD executable=$([[ -x $JANITOR_HUD ]] && echo yes || echo no)
 hud_start
 
 # Welcome is shown by HUD on launch. Wait for start / start_deep / cancel.
-event="$(hud_next_event)"
+hud_next_event
+event="$HUD_EVENT"
 dbg "welcome event=$event"
 
 DEEP_FLAG=""
@@ -236,6 +247,7 @@ case "$event" in
 esac
 
 # --- Assess ---
+hud_drain_events
 hud_cmd "phase assessing"
 assess_cap="$(mktemp "${TMPDIR:-/tmp}/janitor-assess.XXXXXX")"
 dbg "assess begin deep_flag=${DEEP_FLAG:-<none>}"
@@ -248,6 +260,7 @@ freed_line="$(grep -E '^Freed \(measured\):' "$assess_cap" 2>/dev/null | tail -1
 dbg "assess freed_line=$freed_line log=$assess_log"
 
 # --- Choose ---
+hud_drain_events
 item_count="$(hud_send_choose_items)"
 dbg "choose items=$item_count"
 
@@ -260,31 +273,41 @@ if [[ "$item_count" -eq 0 ]]; then
   hud_cmd "done_line Full log:"
   hud_cmd "done_line ${assess_log:-none}"
   hud_cmd "done_end"
-  event="$(hud_next_event)"
-  dbg "empty-done event=$event"
+  hud_next_event
+  dbg "empty-done event=$HUD_EVENT"
   exit 0
 fi
 
-event="$(hud_next_event)"
-dbg "choose event=$event"
-case "$event" in
-  cancel|"")
-    notify "Janitor" "Cleanup cancelled — nothing deleted."
-    exit 0
-    ;;
-  sweep\ *)
-    selected="${event#sweep }"
-    ;;
-  *)
-    dbg "unexpected choose event: $event"
-    exit 0
-    ;;
-esac
+# Wait until user picks tasks (or cancels). Ignore stale welcome clicks.
+while true; do
+  hud_next_event
+  event="$HUD_EVENT"
+  dbg "choose event=$event"
+  case "$event" in
+    start|start_deep)
+      dbg "ignoring stale welcome event during choose"
+      continue
+      ;;
+    cancel|"")
+      notify "Janitor" "Cleanup cancelled — nothing deleted."
+      exit 0
+      ;;
+    sweep\ *)
+      selected="${event#sweep }"
+      break
+      ;;
+    *)
+      dbg "unexpected choose event: $event"
+      exit 0
+      ;;
+  esac
+done
 
 [[ -z "$selected" ]] && exit 0
 dbg "selected=$selected"
 
 # --- Sweep ---
+hud_drain_events
 hud_cmd "phase sweeping"
 clean_cap="$(mktemp "${TMPDIR:-/tmp}/janitor-clean.XXXXXX")"
 dbg "clean begin only=$selected"
@@ -297,6 +320,7 @@ result_line="$(grep -E '^Freed \(measured\):' "$clean_cap" 2>/dev/null | tail -1
 log_summary="$(log_task_summary "${clean_log:-/dev/null}")"
 
 # --- Done ---
+hud_drain_events
 hud_cmd "phase done"
 hud_cmd "done_line $result_line"
 hud_cmd "done_line "
@@ -312,7 +336,7 @@ hud_cmd "done_end"
 
 notify "🧹 Janitor" "Hooray! ${result_line}"
 
-event="$(hud_next_event)"
-dbg "done event=$event"
+hud_next_event
+dbg "done event=$HUD_EVENT"
 dbg "=== janitor-desktop end ==="
 rm -f "$assess_cap" "$clean_cap" 2>/dev/null || true

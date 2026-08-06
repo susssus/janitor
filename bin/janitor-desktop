@@ -198,9 +198,10 @@ log_task_summary() {
 }
 
 # Build choose items from assess TSV into HUD.
+# item id \t title \t because \t tradeoff \t educate(¶=newline)
 hud_send_choose_items() {
   local assess="$JANITOR_ASSESS_TSV"
-  local count=0 id label freed status title blurb
+  local count=0 id label freed status title because swipe edu edu_wire
   hud_cmd "phase choose"
   if [[ ! -f "$assess" ]]; then
     hud_cmd "items_end"
@@ -212,13 +213,42 @@ hud_send_choose_items() {
     [[ -z "$id" ]] && continue
     [[ "${freed:-0}" -gt 0 ]] || continue
     title="${id} — ${label} ($(fmt_kb "$freed"))"
-    blurb="$(task_blurb "$id")"
-    # Escape nothing special beyond newlines — TSV already flat
-    hud_cmd "item ${id}"$'\t'"${title}"$'\t'"${blurb}"
+    because="$(task_hogging_because "$id")"
+    swipe="$(task_if_you_swipe "$id")"
+    edu="$(task_educate "$id")"
+    edu_wire="${edu//$'\n'/¶}"
+    hud_cmd "item ${id}"$'\t'"${title}"$'\t'"${because}"$'\t'"${swipe}"$'\t'"${edu_wire}"
     count=$((count + 1))
   done <"$assess"
   hud_cmd "items_end"
   echo "$count"
+}
+
+# Educational done summary for selected ids (uses post-clean assess TSV)
+hud_send_swept_edu() {
+  local selected="$1"
+  local id label because swipe path freed_kb size
+  local IFS=','
+  # shellcheck disable=SC2086
+  set -- $selected
+  for id in "$@"; do
+    [[ -z "$id" ]] && continue
+    label="$(task_label "$id")"
+    because="$(task_hogging_because "$id")"
+    swipe="$(task_if_you_swipe "$id")"
+    path="$(hog_measure_path "$id" 2>/dev/null || true)"
+    freed_kb=0
+    if [[ -f "$JANITOR_ASSESS_TSV" ]]; then
+      freed_kb="$(awk -F'\t' -v id="$id" '$1==id {print $3; exit}' "$JANITOR_ASSESS_TSV" 2>/dev/null || true)"
+      freed_kb="${freed_kb:-0}"
+    fi
+    size="$(fmt_kb "${freed_kb:-0}")"
+    hud_cmd "done_line ${HOG_EMOJI} ${label} — freed ${size}"
+    [[ -n "$because" ]] && hud_cmd "done_line    ${because}"
+    [[ -n "$swipe" ]] && hud_cmd "done_line    ${swipe}"
+    [[ -n "$path" ]] && hud_cmd "done_line    ${path}"
+    hud_cmd "done_line "
+  done
 }
 
 # --- Main flow -------------------------------------------------------------
@@ -229,15 +259,17 @@ dbg "HUD=$JANITOR_HUD executable=$([[ -x $JANITOR_HUD ]] && echo yes || echo no)
 
 hud_start
 
-# Welcome is shown by HUD on launch. Wait for start / start_deep / cancel.
+# Welcome is shown by HUD on launch. Wait for start / start_deep / start_brave / cancel.
 hud_next_event
 event="$HUD_EVENT"
 dbg "welcome event=$event"
 
 DEEP_FLAG=""
+BRAVE_FLAG=""
 case "$event" in
-  start) DEEP_FLAG="" ;;
-  start_deep) DEEP_FLAG="--deep" ;;
+  start) DEEP_FLAG=""; BRAVE_FLAG="" ;;
+  start_deep) DEEP_FLAG="--deep"; BRAVE_FLAG="" ;;
+  start_brave) DEEP_FLAG=""; BRAVE_FLAG="--brave" ;;
   cancel|"")
     dbg "cancelled at welcome"
     exit 0
@@ -248,13 +280,21 @@ case "$event" in
     ;;
 esac
 
+# CLI overrides from janitor desktop --brave / --deep
+if [[ "${JANITOR_DESKTOP_DEEP:-0}" == "1" || "${JANITOR_DESKTOP_DEEP:-}" == "1" ]]; then
+  DEEP_FLAG="--deep"
+fi
+if [[ -n "${JANITOR_DESKTOP_BRAVE:-}" ]]; then
+  BRAVE_FLAG="--brave"
+fi
+
 # --- Assess ---
 hud_drain_events
 hud_cmd "phase assessing"
 assess_cap="$(mktemp "${TMPDIR:-/tmp}/janitor-assess.XXXXXX")"
-dbg "assess begin deep_flag=${DEEP_FLAG:-<none>}"
+dbg "assess begin deep_flag=${DEEP_FLAG:-<none>} brave_flag=${BRAVE_FLAG:-<none>}"
 # shellcheck disable=SC2086
-stream_to_hud "$assess_cap" "$JANITOR_BIN" clean --dry-run $DEEP_FLAG || true
+stream_to_hud "$assess_cap" "$JANITOR_BIN" clean --dry-run $DEEP_FLAG $BRAVE_FLAG || true
 dbg "assess done"
 assess_log="$("$JANITOR_BIN" log --path 2>/dev/null || true)"
 freed_line="$(grep -E '^Freed \(measured\):' "$assess_cap" 2>/dev/null | tail -1 || true)"
@@ -268,9 +308,11 @@ dbg "choose items=$item_count"
 
 if [[ "$item_count" -eq 0 ]]; then
   hud_cmd "phase done"
-  hud_cmd "done_line Nothing to sweep right now."
-  hud_cmd "done_line "
-  hud_cmd "done_line $freed_line"
+  assess_kb="$(assess_total_freed_kb)"
+  assess_size="$(fmt_kb "$assess_kb")"
+  hud_cmd "subtitle Nothing to reclaim right now"
+  hud_cmd "done_line Disk freed: ${assess_size}"
+  hud_cmd "done_line (no hogs had reclaimable space this round)"
   hud_cmd "done_line "
   hud_cmd "done_line Full log:"
   hud_cmd "done_line ${assess_log:-none}"
@@ -286,7 +328,7 @@ while true; do
   event="$HUD_EVENT"
   dbg "choose event=$event"
   case "$event" in
-    start|start_deep)
+    start|start_deep|start_brave)
       dbg "ignoring stale welcome event during choose"
       continue
       ;;
@@ -314,23 +356,37 @@ hud_cmd "phase sweeping"
 clean_cap="$(mktemp "${TMPDIR:-/tmp}/janitor-clean.XXXXXX")"
 dbg "clean begin only=$selected"
 # shellcheck disable=SC2086
-stream_to_hud "$clean_cap" "$JANITOR_BIN" clean $DEEP_FLAG --only "$selected" || true
+stream_to_hud "$clean_cap" "$JANITOR_BIN" clean $DEEP_FLAG $BRAVE_FLAG --only "$selected" || true
 dbg "clean done"
 clean_log="$("$JANITOR_BIN" log --path 2>/dev/null || true)"
-result_line="$(grep -E '^Freed \(measured\):' "$clean_cap" 2>/dev/null | tail -1 || true)"
-[[ -z "$result_line" ]] && result_line="Cleanup finished."
-log_summary="$(log_task_summary "${clean_log:-/dev/null}")"
+
+# Ceremonial disk headline from post-clean assess TSV (reliable KB totals)
+disk_kb="$(assess_total_freed_kb)"
+disk_tasks="$(assess_task_count)"
+disk_size="$(fmt_kb "${disk_kb:-0}")"
+result_line="Disk freed: ${disk_size}"
+subtitle_line="Disk freed: ${disk_size}"
+if [[ "${disk_tasks:-0}" -gt 0 ]]; then
+  subtitle_line="Disk freed: ${disk_size} across ${disk_tasks} hogs"
+fi
+dbg "done disk_kb=$disk_kb disk_size=$disk_size tasks=$disk_tasks"
 
 # --- Done ---
 hud_drain_events
 hud_cmd "phase done"
-hud_cmd "done_line $result_line"
+hud_cmd "subtitle ${subtitle_line}"
+hud_cmd "done_line ════════════════════════════════════"
+hud_cmd "done_line   DISK FREED:  ${disk_size}"
+hud_cmd "done_line   (${disk_tasks} hogs swept · measured reclaim)"
+hud_cmd "done_line ════════════════════════════════════"
+hud_cmd "done_line "
+hud_cmd "done_line Benefit of the sweep: reclaimable caches left the disk."
+hud_cmd "done_line (RAM lines in the log are a snapshot only — this tool frees disk.)"
 hud_cmd "done_line "
 hud_cmd "done_line Swept:"
-while IFS= read -r row; do
-  [[ -z "$row" ]] && continue
-  hud_cmd "done_line $row"
-done <<<"$log_summary"
+hud_cmd "done_line "
+hud_send_swept_edu "$selected"
+hud_cmd "done_line Still sacrosanct: Documents & Downloads (untouched)."
 hud_cmd "done_line "
 hud_cmd "done_line Full log:"
 hud_cmd "done_line ${clean_log:-none}"

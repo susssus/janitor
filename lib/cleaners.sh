@@ -207,16 +207,15 @@ clean_cmd_hog() {
 run_all_cleaners() {
   local i id kind
   local deep_banner=0
+  local brave_banner=0
 
   for i in "${!JANITOR_TASK_IDS[@]}"; do
     id="${JANITOR_TASK_IDS[$i]}"
     kind="${JANITOR_TASK_KINDS[$i]}"
 
     if [[ -n "${JANITOR_ONLY:-}" ]]; then
-      # --only: run matching ids only; no skip spam for the rest
       should_run "$id" || continue
     elif ! should_run "$id" && ! hog_is_in_enabled_set "$id"; then
-      # Silent skip: default-off catalog hogs unless adopted or --deep
       continue
     fi
 
@@ -224,6 +223,12 @@ run_all_cleaners() {
       log_echo ""
       log_echo "${C_CYAN}${C_BOLD}── deep profile ──${C_RESET}"
       deep_banner=1
+    fi
+    if hog_unlocked_by_brave "$id" && [[ "$brave_banner" -eq 0 ]]; then
+      log_echo ""
+      log_echo "${C_YELLOW}${C_BOLD}── brave / stupid profile ──${C_RESET}"
+      log_echo "${C_DIM}Wider caches (browsers/media). Still never Documents or Downloads.${C_RESET}"
+      brave_banner=1
     fi
 
     if [[ "$kind" == "path" ]]; then

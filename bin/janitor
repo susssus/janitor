@@ -21,11 +21,12 @@ janitor — Mac developer housekeeper
 Dev caches only. Never touches ~/Documents, ~/Downloads, media, or personal files.
 
 Usage:
-  janitor clean [--dry-run] [--deep] [--only id,id,...] [-v]
-  janitor desktop [--deep]
+  janitor clean [--dry-run] [--deep] [--brave|--stupid] [--only id,id,...] [-v]
+  janitor desktop [--deep] [--brave]
   janitor status
   janitor hogs
   janitor discover
+  janitor educate <id>
   janitor adopt <id>
   janitor hog add <path> [remove|contents]
   janitor tasks
@@ -39,10 +40,11 @@ Commands:
   desktop   GUI: assess → check tasks (opt-in) → clean
   status    Disk, RAM, reclaimable hogs (one 🐗 row each)
   hogs      List catalog + custom hogs and state
-  discover  Suggest default-off / disabled hogs present on disk
+  discover  Suggest off/brave/disabled hogs present on disk
+  educate   Longer explanation for one hog (📖)
   adopt     Opt into a catalog hog (saved in ~/.config/janitor/hogs)
   hog add   Add a custom allowlisted cache path as a hog
-  tasks     List cleaners and enabled/disabled/off state
+  tasks     List cleaners and enabled/disabled/off/brave state
   disable   Permanently opt out of a task (saved in config)
   enable    Re-enable a previously disabled task
   log       Show latest session log
@@ -51,6 +53,8 @@ Commands:
 Options:
   --dry-run      Measure only; delete nothing
   --deep         Include default-off deep hogs (e.g. ShipIt)
+  --brave        Wider sweep: browsers/media caches (alias: --stupid)
+  --stupid       Same as --brave
   --only id,...  Run only these task ids (after assess selection)
   -v, --verbose  Show command output
 
@@ -68,6 +72,7 @@ Examples:
   janitor adopt shipit
   janitor hog add ~/Library/Caches/my-tool
   janitor clean --dry-run
+  janitor clean --brave --dry-run
   janitor desktop
   janitor clean --only homebrew,npm,old_logs
 EOF
@@ -132,11 +137,12 @@ cmd_log() {
 }
 
 cmd_clean() {
-  local dry_run=0 verbose=0 deep=0 only=""
+  local dry_run=0 verbose=0 deep=0 brave=0 only=""
   while [[ $# -gt 0 ]]; do
     case "$1" in
       --dry-run) dry_run=1 ;;
       --deep) deep=1 ;;
+      --brave|--stupid) brave=1 ;;
       --only)
         shift
         [[ $# -gt 0 ]] || die "--only needs a comma-separated id list"
@@ -155,8 +161,9 @@ cmd_clean() {
   DRY_RUN=$dry_run
   VERBOSE=$verbose
   DEEP=$deep
+  BRAVE=$brave
   JANITOR_ONLY="$only"
-  export DRY_RUN VERBOSE DEEP JANITOR_ONLY
+  export DRY_RUN VERBOSE DEEP BRAVE JANITOR_ONLY
 
   local df_before
   df_before="$(free_kb)"
@@ -170,6 +177,9 @@ cmd_clean() {
   fi
   if [[ "$DEEP" -eq 1 ]]; then
     log_echo "${C_CYAN}(deep profile enabled)${C_RESET}"
+  fi
+  if [[ "$BRAVE" -eq 1 ]]; then
+    log_echo "${C_YELLOW}(brave/stupid profile — browsers & media caches; never Documents/Downloads)${C_RESET}"
   fi
   if [[ -n "$JANITOR_ONLY" ]]; then
     log_echo "${C_CYAN}(only: $JANITOR_ONLY)${C_RESET}"
@@ -200,10 +210,11 @@ cmd_clean() {
 }
 
 cmd_desktop() {
-  local deep=0
+  local deep=0 brave=0
   while [[ $# -gt 0 ]]; do
     case "$1" in
       --deep) deep=1 ;;
+      --brave|--stupid) brave=1 ;;
       -h|--help) usage; return 0 ;;
       *) die "unknown option: $1" ;;
     esac
@@ -211,6 +222,9 @@ cmd_desktop() {
   done
   if [[ "$deep" -eq 1 ]]; then
     export JANITOR_DESKTOP_DEEP=1
+  fi
+  if [[ "$brave" -eq 1 ]]; then
+    export JANITOR_DESKTOP_BRAVE=1
   fi
   exec "$JANITOR_HOME/bin/janitor-desktop"
 }
@@ -260,6 +274,10 @@ main() {
     status)   cmd_status "$@" ;;
     hogs)     cmd_hogs "$@" ;;
     discover) cmd_discover "$@" ;;
+    educate)
+      [[ $# -ge 1 ]] || die "usage: janitor educate <id>"
+      cmd_educate "$1"
+      ;;
     adopt)
       [[ $# -ge 1 ]] || die "usage: janitor adopt <id>"
       cmd_adopt "$1"

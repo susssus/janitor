@@ -9,15 +9,16 @@ import Foundation
 //
 // Commands (bash → Swift):
 //   phase welcome|assessing|choose|sweeping|done
+//   subtitle <text>
 //   log <text>
-//   item <id>\t<title>\t<blurb>
+//   item <id>\t<title>\t<because>\t<tradeoff>\t<educate¶paras>
 //   items_end
 //   done_line <text>
 //   done_end
 //   quit
 //
 // Events (Swift → bash):
-//   start | start_deep | cancel | sweep id1,id2,… | ok
+//   start | start_deep | start_brave | cancel | sweep id1,id2,… | ok
 
 let sessionDir: String = {
     let args = CommandLine.arguments
@@ -52,7 +53,9 @@ func hudLog(_ msg: String) {
 struct ChooseItem {
     let id: String
     let title: String
-    let blurb: String
+    let because: String
+    let tradeoff: String
+    let educate: String
 }
 
 final class Hud: NSObject, NSApplicationDelegate {
@@ -76,6 +79,7 @@ final class Hud: NSObject, NSApplicationDelegate {
     var chooseScroll: NSScrollView!
     var chooseDoc: NSView!
     var chooseChecks: [NSButton] = []
+    var chooseBooks: [NSButton] = []
     var chooseItems: [ChooseItem] = []
     var choosePrompt: NSTextField!
 
@@ -218,32 +222,38 @@ final class Hud: NSObject, NSApplicationDelegate {
     func buildWelcome() {
         welcomeBox = NSView(frame: NSRect(x: 0, y: 0, width: winW, height: winH - 170))
         let blurb = label(
-            "Reclaim developer caches. Never touches Documents or Downloads.",
-            frame: NSRect(x: 40, y: 180, width: winW - 80, height: 40),
-            size: 13,
+            "Dev caches by default. Never Documents or Downloads.\nBrave/Stupid adds browsers & media caches.",
+            frame: NSRect(x: 40, y: 200, width: winW - 80, height: 44),
+            size: 12,
             bold: false
         )
         blurb.textColor = NSColor(calibratedWhite: 0.7, alpha: 1)
 
         let start = makeButton(
             "Start sweep",
-            frame: NSRect(x: (winW - 280) / 2, y: 110, width: 280, height: 36),
+            frame: NSRect(x: (winW - 300) / 2, y: 140, width: 300, height: 36),
             action: #selector(onStart),
             accent: true
         )
         let deep = makeButton(
             "Start deep sweep",
-            frame: NSRect(x: (winW - 280) / 2, y: 68, width: 280, height: 32),
+            frame: NSRect(x: (winW - 300) / 2, y: 98, width: 300, height: 32),
             action: #selector(onStartDeep)
+        )
+        let brave = makeButton(
+            "Brave / Stupid sweep",
+            frame: NSRect(x: (winW - 300) / 2, y: 58, width: 300, height: 32),
+            action: #selector(onStartBrave)
         )
         let cancel = makeButton(
             "Cancel",
-            frame: NSRect(x: (winW - 120) / 2, y: 24, width: 120, height: 28),
+            frame: NSRect(x: (winW - 120) / 2, y: 16, width: 120, height: 28),
             action: #selector(onCancel)
         )
         welcomeBox.addSubview(blurb)
         welcomeBox.addSubview(start)
         welcomeBox.addSubview(deep)
+        welcomeBox.addSubview(brave)
         welcomeBox.addSubview(cancel)
         contentRoot.addSubview(welcomeBox)
         welcomeBox.isHidden = true
@@ -277,9 +287,9 @@ final class Hud: NSObject, NSApplicationDelegate {
         chooseBox = NSView(frame: NSRect(x: 0, y: 0, width: winW, height: winH - 170))
 
         choosePrompt = label(
-            "Check what you want cleaned (none checked). Each row explains what it removes:",
+            "Check what to clean. Hogging because + If you swipe. 📖 = educate me further.",
             frame: NSRect(x: 24, y: winH - 200, width: winW - 48, height: 22),
-            size: 12,
+            size: 11,
             bold: false
         )
         choosePrompt.alignment = .left
@@ -383,6 +393,7 @@ final class Hud: NSObject, NSApplicationDelegate {
         case "done":
             doneBox.isHidden = false
             titleLabel.stringValue = "Hooray! Cleanup complete"
+            // subtitle often overwritten by bash "subtitle Disk freed: …"
             subtitleLabel.stringValue = "Your disk is a little tidier"
             animate = false
             broomLabel.stringValue = "☆(≧▽≦)☆"
@@ -401,10 +412,12 @@ final class Hud: NSObject, NSApplicationDelegate {
 
     func rebuildChooseList() {
         chooseChecks.removeAll()
+        chooseBooks.removeAll()
         chooseDoc.subviews.forEach { $0.removeFromSuperview() }
 
-        let rowH: CGFloat = 52
+        let rowH: CGFloat = 78
         let listW = winW - 64
+        let bookW: CGFloat = 36
         let docH = max(CGFloat(chooseItems.count) * rowH, chooseScroll.frame.height)
         chooseDoc.frame = NSRect(x: 0, y: 0, width: listW, height: docH)
 
@@ -412,7 +425,7 @@ final class Hud: NSObject, NSApplicationDelegate {
             let y = docH - CGFloat(i + 1) * rowH
             let row = NSView(frame: NSRect(x: 0, y: y, width: listW, height: rowH))
 
-            let cb = NSButton(frame: NSRect(x: 8, y: 18, width: listW - 24, height: 24))
+            let cb = NSButton(frame: NSRect(x: 8, y: 48, width: listW - bookW - 28, height: 22))
             cb.setButtonType(.switch)
             cb.title = item.title
             cb.state = .off
@@ -423,15 +436,40 @@ final class Hud: NSObject, NSApplicationDelegate {
             row.addSubview(cb)
             chooseChecks.append(cb)
 
-            if !item.blurb.isEmpty {
-                let note = NSTextField(frame: NSRect(x: 32, y: 2, width: listW - 48, height: 18))
-                note.stringValue = item.blurb
+            let book = NSButton(frame: NSRect(x: listW - bookW - 8, y: 44, width: bookW, height: 28))
+            book.bezelStyle = .rounded
+            book.title = "📖"
+            book.toolTip = "Educate me further"
+            book.tag = i
+            book.target = self
+            book.action = #selector(onEducate(_:))
+            book.isEnabled = !item.educate.isEmpty
+            row.addSubview(book)
+            chooseBooks.append(book)
+
+            var noteY: CGFloat = 28
+            if !item.because.isEmpty {
+                let note = NSTextField(frame: NSRect(x: 32, y: noteY, width: listW - bookW - 48, height: 16))
+                note.stringValue = item.because
                 note.isBezeled = false
                 note.drawsBackground = false
                 note.isEditable = false
                 note.isSelectable = false
-                note.font = NSFont.systemFont(ofSize: 11)
+                note.font = NSFont.systemFont(ofSize: 10)
                 note.textColor = NSColor.secondaryLabelColor
+                note.lineBreakMode = .byTruncatingTail
+                row.addSubview(note)
+                noteY = 12
+            }
+            if !item.tradeoff.isEmpty {
+                let note = NSTextField(frame: NSRect(x: 32, y: 4, width: listW - bookW - 48, height: 16))
+                note.stringValue = item.tradeoff
+                note.isBezeled = false
+                note.drawsBackground = false
+                note.isEditable = false
+                note.isSelectable = false
+                note.font = NSFont.systemFont(ofSize: 10)
+                note.textColor = NSColor(calibratedRed: 0.95, green: 0.65, blue: 0.35, alpha: 1)
                 note.lineBreakMode = .byTruncatingTail
                 row.addSubview(note)
             }
@@ -504,13 +542,17 @@ final class Hud: NSObject, NSApplicationDelegate {
         if line.hasPrefix("item ") || line.hasPrefix("item\t") {
             bufferingItems = true
             let rest = line.hasPrefix("item ") ? String(line.dropFirst(5)) : String(line.dropFirst(5))
-            let parts = rest.split(separator: "\t", maxSplits: 2, omittingEmptySubsequences: false)
+            let parts = rest.split(separator: "\t", maxSplits: 4, omittingEmptySubsequences: false)
             guard parts.count >= 2 else { return }
+            let eduRaw = parts.count > 4 ? String(parts[4]) : ""
+            let edu = eduRaw.replacingOccurrences(of: "¶", with: "\n\n")
             pendingItems.append(
                 ChooseItem(
                     id: String(parts[0]),
                     title: String(parts[1]),
-                    blurb: parts.count > 2 ? String(parts[2]) : ""
+                    because: parts.count > 2 ? String(parts[2]) : "",
+                    tradeoff: parts.count > 3 ? String(parts[3]) : "",
+                    educate: edu
                 )
             )
             return
@@ -520,6 +562,10 @@ final class Hud: NSObject, NSApplicationDelegate {
             pendingItems = []
             bufferingItems = false
             rebuildChooseList()
+            return
+        }
+        if line.hasPrefix("subtitle ") {
+            subtitleLabel.stringValue = String(line.dropFirst(9))
             return
         }
         if line.hasPrefix("done_line ") {
@@ -543,8 +589,25 @@ final class Hud: NSObject, NSApplicationDelegate {
 
     @objc func onStart() { emit("start") }
     @objc func onStartDeep() { emit("start_deep") }
+    @objc func onStartBrave() { emit("start_brave") }
     @objc func onCancel() { emit("cancel") }
     @objc func onOK() { emit("ok") }
+
+    @objc func onEducate(_ sender: NSButton) {
+        let i = sender.tag
+        guard i >= 0, i < chooseItems.count else { return }
+        let item = chooseItems[i]
+        let alert = NSAlert()
+        alert.messageText = "📖 Educate me further — \(item.id)"
+        var body = ""
+        if !item.because.isEmpty { body += item.because + "\n\n" }
+        if !item.tradeoff.isEmpty { body += item.tradeoff + "\n\n" }
+        body += item.educate.isEmpty ? "(no longer note for this hog yet)" : item.educate
+        alert.informativeText = body
+        alert.alertStyle = .informational
+        alert.addButton(withTitle: "Got it")
+        alert.runModal()
+    }
 
     @objc func onCheckAll() {
         for cb in chooseChecks { cb.state = .on }

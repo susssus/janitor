@@ -12,7 +12,6 @@ SACROSANCT_DIRS=(
 )
 
 # Positive allowlist — only these cache-like roots may be cleaned
-# (dev tool caches; never media / personal documents)
 janitor_allowlist_roots() {
   local roots=(
     "$HOME/Library/Caches"
@@ -25,6 +24,8 @@ janitor_allowlist_roots() {
     "$HOME/.pub-cache"
     "$HOME/.dartServer"
     "$HOME/.android"
+    # Narrow media-server cache (brave catalog); never whole Application Support
+    "$HOME/Library/Application Support/stremio-server"
   )
   local brew_cache
   brew_cache="$(brew --cache 2>/dev/null || true)"
@@ -226,7 +227,7 @@ log_init() {
   {
     echo "# janitor ${mode}  $(date -Iseconds 2>/dev/null || date)"
     echo "# host=$(hostname -s 2>/dev/null || hostname)  user=$USER"
-    echo "# dry_run=${DRY_RUN:-0}  deep=${DEEP:-0}  only=${JANITOR_ONLY:--}"
+    echo "# dry_run=${DRY_RUN:-0}  deep=${DEEP:-0}  brave=${BRAVE:-0}  only=${JANITOR_ONLY:--}"
     echo "#"
   } >>"$LOG_FILE"
   ln -sfn "$LOG_FILE" "$JANITOR_LOG_DIR/latest.log"
@@ -428,6 +429,25 @@ log_skip() {
   history_append "$(date -Iseconds 2>/dev/null || date)" "$id" "$path" 0 0 0 "skipped:$reason"
 }
 
+# Sum freed_kb from last-assess.tsv (post-clean / post-assess)
+assess_total_freed_kb() {
+  local f="${1:-$JANITOR_ASSESS_TSV}"
+  if [[ ! -f "$f" ]]; then
+    echo 0
+    return 0
+  fi
+  awk -F'\t' 'NR>1 && $1 != "id" && $3 ~ /^[0-9]+$/ { s += $3 } END { print s+0 }' "$f"
+}
+
+assess_task_count() {
+  local f="${1:-$JANITOR_ASSESS_TSV}"
+  if [[ ! -f "$f" ]]; then
+    echo 0
+    return 0
+  fi
+  awk -F'\t' 'NR>1 && $1 != "id" && $1 != "" { n++ } END { print n+0 }' "$f"
+}
+
 log_finish() {
   local df_before="${1:-0}" df_after
   df_after="$(free_kb)"
@@ -436,8 +456,8 @@ log_finish() {
 
   log_echo ""
   log_echo "${C_MAGENTA}${C_BOLD}── summary ──${C_RESET}"
-  log_echo "${C_MAGENTA}${C_BOLD}${K_DONE}${C_RESET} ${C_GREEN}${C_BOLD}Freed (measured): $(fmt_kb "$TOTAL_FREED_KB")${C_RESET} across $TOTAL_TASKS tasks"
-  log_echo "${C_DIM}df avail delta: $(fmt_kb "$df_delta") (informational)${C_RESET}"
+  log_echo "${C_MAGENTA}${C_BOLD}${K_DONE}${C_RESET} ${C_GREEN}${C_BOLD}Disk freed (measured): $(fmt_kb "$TOTAL_FREED_KB")${C_RESET} across $TOTAL_TASKS tasks"
+  log_echo "${C_DIM}df avail delta: $(fmt_kb "$df_delta") (informational — APFS is noisy)${C_RESET}"
   log_echo "${C_DIM}Log: ${LOG_FILE}${C_RESET}"
 }
 

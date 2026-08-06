@@ -6,14 +6,14 @@ Mac **developer** housekeeper. Reclaims disk from known **dev tool** caches (`~/
 
 ## Hogs
 
-Each reclaimable target is a **hog** (🐗). List them one row per hog:
+Each reclaimable target is a **hog** (🐗). List them one row per hog. Choose / done UI shows **Hogging because:** and **If you swipe:** — tap **📖** (or `janitor educate <id>`) for up to three short paragraphs more.
 
 ```bash
-janitor hogs          # catalog + custom, with state
-janitor status        # disk / RAM + hog sizes
-janitor discover      # suggest default-off / disabled hogs on disk
-janitor adopt shipit  # opt into a catalog hog
-janitor hog add ~/Library/Caches/my-tool
+janitor hogs
+janitor discover
+janitor educate npm
+janitor adopt shipit
+janitor clean --brave --dry-run
 ```
 
 Catalog lives in the repo (`config/hogs.catalog`). Your enabled extras and custom paths live in `~/.config/janitor/hogs` (not committed).
@@ -106,11 +106,16 @@ Each task records path, before/after KB, freed KB, and status. The summary uses 
 
 `status` and each `clean` also print a **RAM snapshot** (available-ish, compressed, wired, memory free %, top RSS). Disk view prefers `/System/Volumes/Data`.
 
-## `--deep`
+## `--deep` and `--brave` / `--stupid`
 
-Also clears default-off deep hogs (Claude ShipIt updater leftovers). Adopt with `janitor adopt shipit` to enable without `--deep`.
+| Flag | Unlocks |
+|------|---------|
+| `--deep` | Default-off **dev** leftovers (e.g. Claude ShipIt) |
+| `--brave` / `--stupid` | **Wider** browser & media caches (Chrome, Safari, Steam, Spotify, Discord, Stremio, …) |
 
-Still never touches Documents/Downloads, Docker.raw, full Cursor Application Support, or the whole Android SDK tree (those appear in `status` as report-only).
+Still **never** Documents/Downloads. Adopt individual brave hogs with `janitor adopt <id>` to enable without the flag. Desktop welcome offers **Brave / Stupid sweep**.
+
+Report-only (never cleaned): Docker.raw / Containers, full Cursor Application Support, whole Android SDK tree.
 
 ## Layout
 

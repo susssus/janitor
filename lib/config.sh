@@ -14,10 +14,12 @@ HOG_EMOJI="🐗"
 JANITOR_TASK_IDS=()
 JANITOR_TASK_LABELS=()
 JANITOR_TASK_BLURBS=()
+JANITOR_TASK_TRADEOFFS=()
+JANITOR_TASK_EDUCATE=()
 JANITOR_TASK_KINDS=()      # path | cmd
 JANITOR_TASK_PATHS=()      # expanded path or cmd key
 JANITOR_TASK_MODES=()      # remove | contents
-JANITOR_TASK_DEFAULTS=()   # on | off
+JANITOR_TASK_DEFAULTS=()   # on | off | brave
 JANITOR_TASK_EMOJIS=()
 JANITOR_TASK_CUSTOM=()     # 0 | 1
 
@@ -40,6 +42,8 @@ catalog_load() {
   JANITOR_TASK_IDS=()
   JANITOR_TASK_LABELS=()
   JANITOR_TASK_BLURBS=()
+  JANITOR_TASK_TRADEOFFS=()
+  JANITOR_TASK_EDUCATE=()
   JANITOR_TASK_KINDS=()
   JANITOR_TASK_PATHS=()
   JANITOR_TASK_MODES=()
@@ -53,18 +57,20 @@ catalog_load() {
     return 0
   fi
 
-  local line id kind path_or_cmd mode default emoji label blurb
+  local line id kind path_or_cmd mode default emoji label blurb tradeoff educate
   while IFS= read -r line || [[ -n "$line" ]]; do
     [[ -z "$line" || "$line" =~ ^[[:space:]]*# ]] && continue
-    IFS='|' read -r id kind path_or_cmd mode default emoji label blurb <<<"$line" || true
+    IFS='|' read -r id kind path_or_cmd mode default emoji label blurb tradeoff educate <<<"$line" || true
     if [[ -z "${id:-}" || -z "${kind:-}" || -z "${label:-}" ]]; then
       catalog_warn "bad line: $line"
       continue
     fi
     case "$kind" in path|cmd) ;; *) catalog_warn "bad kind '$kind' for $id"; continue ;; esac
-    case "${default:-on}" in on|off) ;; *) default="on" ;; esac
+    case "${default:-on}" in on|off|brave) ;; *) default="on" ;; esac
     case "${mode:-remove}" in remove|contents) ;; *) mode="remove" ;; esac
     emoji="${emoji:-$HOG_EMOJI}"
+    # ¶ → real newlines for educate paragraphs
+    educate="${educate//¶/$'\n\n'}"
 
     JANITOR_TASK_IDS+=("$id")
     JANITOR_TASK_KINDS+=("$kind")
@@ -78,6 +84,8 @@ catalog_load() {
     JANITOR_TASK_EMOJIS+=("$emoji")
     JANITOR_TASK_LABELS+=("$label")
     JANITOR_TASK_BLURBS+=("${blurb:-}")
+    JANITOR_TASK_TRADEOFFS+=("${tradeoff:-}")
+    JANITOR_TASK_EDUCATE+=("${educate:-}")
     JANITOR_TASK_CUSTOM+=("0")
   done <"$file"
 }
@@ -115,7 +123,13 @@ user_hogs_load() {
       JANITOR_TASK_DEFAULTS+=("on")
       JANITOR_TASK_EMOJIS+=("$HOG_EMOJI")
       JANITOR_TASK_LABELS+=("$label")
-      JANITOR_TASK_BLURBS+=("Custom path hog.")
+      JANITOR_TASK_BLURBS+=("you added this allowlisted cache path yourself")
+      JANITOR_TASK_TRADEOFFS+=("depends on the path — regenerable cache data only if you chose well")
+      JANITOR_TASK_EDUCATE+=("This is a custom hog you registered with janitor hog add.
+
+Janitor only allows paths under known cache roots, and never Documents or Downloads.
+
+If the tradeoff surprises you, disable or remove the line from ~/.config/janitor/hogs.")
       JANITOR_TASK_CUSTOM+=("1")
       continue
     fi
@@ -152,6 +166,50 @@ task_blurb() {
     return 0
   fi
   echo ""
+}
+
+task_tradeoff() {
+  local want="$1" i
+  i="$(task_index "$want" 2>/dev/null || true)"
+  if [[ -n "$i" ]]; then
+    echo "${JANITOR_TASK_TRADEOFFS[$i]}"
+    return 0
+  fi
+  echo ""
+}
+
+task_educate() {
+  local want="$1" i
+  i="$(task_index "$want" 2>/dev/null || true)"
+  if [[ -n "$i" ]]; then
+    echo "${JANITOR_TASK_EDUCATE[$i]}"
+    return 0
+  fi
+  echo ""
+}
+
+# Educational one-liner for UI / done screen
+task_hogging_because() {
+  local id="$1" blurb
+  blurb="$(task_blurb "$id")"
+  [[ -n "$blurb" ]] || return 0
+  if [[ "$blurb" == [Hh]ogging\ because:* ]]; then
+    echo "$blurb"
+  else
+    echo "Hogging because: $blurb"
+  fi
+}
+
+# Consequence of cleaning this hog
+task_if_you_swipe() {
+  local id="$1" t
+  t="$(task_tradeoff "$id")"
+  [[ -n "$t" ]] || return 0
+  if [[ "$t" == [Ii]f\ you\ swipe:* ]]; then
+    echo "$t"
+  else
+    echo "If you swipe: $t"
+  fi
 }
 
 task_label() {
@@ -249,7 +307,7 @@ user_hog_listed() {
     || grep -E "^[[:space:]]*custom:${id}\\|" "$JANITOR_HOGS_FILE" >/dev/null 2>&1
 }
 
-# True if --deep unlocks this default-off catalog hog for this run
+# True if --deep unlocks this default=off catalog hog for this run
 hog_unlocked_by_deep() {
   local id="$1" i
   [[ "${DEEP:-0}" -eq 1 ]] || return 1
@@ -260,10 +318,23 @@ hog_unlocked_by_deep() {
   return 0
 }
 
-# should_run id — enabled set (or deep-unlocked) + not disabled + JANITOR_ONLY
+# True if --brave/--stupid unlocks this default=brave catalog hog
+hog_unlocked_by_brave() {
+  local id="$1" i
+  [[ "${BRAVE:-0}" -eq 1 ]] || return 1
+  i="$(task_index "$id" 2>/dev/null || true)"
+  [[ -n "$i" ]] || return 1
+  [[ "${JANITOR_TASK_CUSTOM[$i]}" == "0" ]] || return 1
+  [[ "${JANITOR_TASK_DEFAULTS[$i]}" == "brave" ]] || return 1
+  return 0
+}
+
+# should_run id — enabled set (or deep/brave-unlocked) + not disabled + JANITOR_ONLY
 should_run() {
   local id="$1"
-  if ! hog_is_in_enabled_set "$id" && ! hog_unlocked_by_deep "$id"; then
+  if ! hog_is_in_enabled_set "$id" \
+    && ! hog_unlocked_by_deep "$id" \
+    && ! hog_unlocked_by_brave "$id"; then
     return 1
   fi
   if task_is_disabled "$id"; then
@@ -280,7 +351,15 @@ should_run() {
 
 skip_reason_for() {
   local id="$1"
-  if ! hog_is_in_enabled_set "$id" && ! hog_unlocked_by_deep "$id"; then
+  if ! hog_is_in_enabled_set "$id" \
+    && ! hog_unlocked_by_deep "$id" \
+    && ! hog_unlocked_by_brave "$id"; then
+    local i
+    i="$(task_index "$id" 2>/dev/null || true)"
+    if [[ -n "$i" && "${JANITOR_TASK_DEFAULTS[$i]}" == "brave" ]]; then
+      echo "brave mode only (or adopt)"
+      return
+    fi
     echo "not adopted (default off)"
     return
   fi
@@ -370,6 +449,8 @@ list_tasks() {
       state="disabled"
     elif hog_is_in_enabled_set "$id"; then
       state="enabled"
+    elif [[ "${JANITOR_TASK_DEFAULTS[$i]}" == "brave" ]]; then
+      state="brave"
     else
       state="off"
     fi
@@ -426,7 +507,7 @@ cmd_hog_add() {
 
   if ! path_is_allowlisted "$path"; then
     echo "janitor: REFUSED — path not under an allowlisted cache root: $path" >&2
-    echo "janitor: (Documents, Downloads, media, and personal files are never cleaned)" >&2
+    echo "janitor: (Documents and Downloads are never cleaned)" >&2
     return 1
   fi
   case "$mode" in remove|contents) ;; *)
@@ -454,7 +535,13 @@ cmd_hog_add() {
   JANITOR_TASK_DEFAULTS+=("on")
   JANITOR_TASK_EMOJIS+=("$HOG_EMOJI")
   JANITOR_TASK_LABELS+=("$label")
-  JANITOR_TASK_BLURBS+=("Custom path hog.")
+  JANITOR_TASK_BLURBS+=("you added this allowlisted cache path yourself")
+  JANITOR_TASK_TRADEOFFS+=("depends on the path — regenerable cache data only if you chose well")
+  JANITOR_TASK_EDUCATE+=("This is a custom hog you registered with janitor hog add.
+
+Janitor only allows paths under known cache roots, and never Documents or Downloads.
+
+If the tradeoff surprises you, disable or remove the line from ~/.config/janitor/hogs.")
   JANITOR_TASK_CUSTOM+=("1")
 
   echo "added hog: $id → $path"
@@ -486,23 +573,24 @@ cmd_hogs() {
       else
         state="enabled"
       fi
+    elif [[ "${JANITOR_TASK_DEFAULTS[$i]}" == "brave" ]]; then
+      state="brave"
     else
       state="off"
     fi
     hog_row "$id" "$size" "$label" "$state"
   done
   echo
-  echo "${C_DIM}Policy: dev caches only — never Documents, Downloads, or media.${C_RESET}"
-  echo "${C_DIM}Adopt: janitor adopt <id>   Add: janitor hog add <path>${C_RESET}"
+  echo "${C_DIM}Policy: never Documents or Downloads. Brave tier = browsers/media caches.${C_RESET}"
+  echo "${C_DIM}Educate: janitor educate <id>   Adopt: janitor adopt <id>${C_RESET}"
 }
 
-# Discover: default-off or not-enabled catalog hogs that exist on disk
+# Discover: default-off / brave / disabled hogs that exist on disk
 cmd_discover() {
-  local i id label size path blurb found=0
+  local i id label size path because swipe found=0
   section "Discover hogs"
   for i in "${!JANITOR_TASK_IDS[@]}"; do
     id="${JANITOR_TASK_IDS[$i]}"
-    # Skip already enabled & not disabled
     if hog_is_in_enabled_set "$id" && ! task_is_disabled "$id"; then
       continue
     fi
@@ -513,19 +601,47 @@ cmd_discover() {
     [[ "$kb" -gt 0 ]] || continue
     size="$(fmt_kb "$kb")"
     label="${JANITOR_TASK_LABELS[$i]}"
-    blurb="${JANITOR_TASK_BLURBS[$i]}"
-    hog_row "$id" "$size" "$label" "suggest"
-    if [[ -n "$blurb" ]]; then
-      echo "    ${C_DIM}${blurb}${C_RESET}"
+    if [[ "${JANITOR_TASK_DEFAULTS[$i]}" == "brave" ]]; then
+      hog_row "$id" "$size" "$label" "brave?"
+    else
+      hog_row "$id" "$size" "$label" "suggest"
     fi
+    because="$(task_hogging_because "$id")"
+    swipe="$(task_if_you_swipe "$id")"
+    [[ -n "$because" ]] && echo "    ${C_DIM}${because}${C_RESET}"
+    [[ -n "$swipe" ]] && echo "    ${C_DIM}${swipe}${C_RESET}"
+    echo "    ${C_DIM}📖 janitor educate ${id}${C_RESET}"
     found=1
   done
   if [[ "$found" -eq 0 ]]; then
     echo "  (no new hogs found — your enabled set covers what's on disk)"
   else
     echo
-    echo "${C_DIM}Adopt a suggestion: janitor adopt <id>${C_RESET}"
+    echo "${C_DIM}Adopt: janitor adopt <id>   ·   Wider sweep: janitor clean --brave${C_RESET}"
   fi
+}
+
+cmd_educate() {
+  local id="$1"
+  [[ -n "$id" ]] || { echo "usage: janitor educate <id>" >&2; return 1; }
+  local idx label because swipe edu
+  idx="$(task_index "$id" 2>/dev/null || true)"
+  [[ -n "$idx" ]] || { echo "janitor: unknown hog id: $id" >&2; return 1; }
+  label="$(task_label "$id")"
+  because="$(task_hogging_because "$id")"
+  swipe="$(task_if_you_swipe "$id")"
+  edu="$(task_educate "$id")"
+  banner "Educate me — ${label}" "📖"
+  echo
+  [[ -n "$because" ]] && echo "$because"
+  [[ -n "$swipe" ]] && echo "$swipe"
+  echo
+  if [[ -n "$edu" ]]; then
+    printf '%s\n' "$edu"
+  else
+    echo "(no longer explanation for this hog yet)"
+  fi
+  echo
 }
 
 # Load catalog + user hogs (call after JANITOR_HOME is set)

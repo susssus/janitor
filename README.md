@@ -11,10 +11,10 @@ Mac development housekeeper. Reclaims disk from **`~/Library`** caches/logs/dev 
 Puts **Janitor.app** on your Desktop. Double-click:
 
 1. **Assess** (or Assess deep) — dry-run; nothing deleted  
-2. **Uncheck** anything you want to keep (multi-select list)  
-3. Confirm → **Clean now** runs only what stayed checked  
+2. **Check** what to clean (none checked by default; Check all / Uncheck all at the top)  
+3. Confirm → **Clean now** runs only what you checked  
 
-Optional: “Remember” deselections → saved in `~/.config/janitor/disabled` for next time.
+Permanent skips: `janitor disable <id>` (saved in `~/.config/janitor/disabled`).
 
 Same flow from the terminal: `janitor desktop`.
 
@@ -45,7 +45,7 @@ Ensure `~/bin` is on your `PATH`, then:
 
 ```bash
 janitor status              # disk + reclaimable sizes (sorted)
-janitor desktop             # GUI: assess → opt-out → clean
+janitor desktop             # GUI: assess → check tasks → clean
 janitor tasks               # enable/disable list
 janitor clean --dry-run     # preview + write log (no deletes)
 janitor clean               # clean + always log what/how much
@@ -96,7 +96,7 @@ Still never touches Documents/Downloads, Docker.raw, full Cursor Application Sup
 
 ```
 bin/janitor
-bin/janitor-desktop   # assess → checkbox opt-out → clean
+bin/janitor-desktop   # assess → checkbox opt-in → clean
 lib/common.sh
 lib/config.sh         # ~/.config/janitor + portable PATH
 lib/cleaners.sh

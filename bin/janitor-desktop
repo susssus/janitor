@@ -1,5 +1,5 @@
 #!/bin/bash
-# janitor-desktop — assess → checkbox opt-out → clean
+# janitor-desktop — assess → checkbox opt-in → clean
 set -euo pipefail
 
 JANITOR_HOME="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
@@ -93,7 +93,8 @@ display dialog "$(osascript_escape "$message")" with title "🧹 Janitor" button
 EOF
 }
 
-# Build AppleScript list from last-assess.tsv; user deselects to opt out.
+# Build AppleScript list from last-assess.tsv; user checks what to clean (none by default).
+# Top rows: Check all / Uncheck all (re-open list with updated selection).
 # Prints selected task ids as comma-separated on stdout; CANCEL / EMPTY on special cases.
 choose_tasks() {
   local assess="$JANITOR_ASSESS_TSV"
@@ -102,7 +103,7 @@ choose_tasks() {
     return 0
   fi
 
-  local items=() defaults=() line id label freed status display
+  local items=() id label freed status display
   while IFS=$'\t' read -r id label freed status; do
     [[ "$id" == "id" ]] && continue
     [[ -z "$id" ]] && continue
@@ -110,7 +111,6 @@ choose_tasks() {
     [[ "${freed:-0}" -gt 0 ]] || continue
     display="${id} — ${label} ($(fmt_kb "$freed"))"
     items+=("$display")
-    defaults+=("$display")
   done <"$assess"
 
   if [[ ${#items[@]} -eq 0 ]]; then
@@ -118,23 +118,29 @@ choose_tasks() {
     return 0
   fi
 
-  # Write AppleScript list literals
-  local list_lit="" def_lit="" it
-  for it in "${items[@]}"; do
-    [[ -n "$list_lit" ]] && list_lit+=", "
-    list_lit+="\"$(osascript_escape "$it")\""
-  done
-  for it in "${defaults[@]}"; do
-    [[ -n "$def_lit" ]] && def_lit+=", "
-    def_lit+="\"$(osascript_escape "$it")\""
-  done
+  local CHECK_ALL="☑ Check all"
+  local UNCHECK_ALL="☐ Uncheck all"
+  local selected_defaults=() # all unchecked by default
+  local chosen row it list_lit def_lit
+  local has_check_all has_uncheck_all picked selected_ids
 
-  local chosen
-  chosen="$(osascript <<EOF
+  while true; do
+    list_lit="\"$(osascript_escape "$CHECK_ALL")\", \"$(osascript_escape "$UNCHECK_ALL")\""
+    for it in "${items[@]}"; do
+      list_lit+=", \"$(osascript_escape "$it")\""
+    done
+
+    def_lit=""
+    for it in "${selected_defaults[@]}"; do
+      [[ -n "$def_lit" ]] && def_lit+=", "
+      def_lit+="\"$(osascript_escape "$it")\""
+    done
+
+    chosen="$(osascript <<EOF
 try
   set taskList to {${list_lit}}
   set defaultList to {${def_lit}}
-  set chosen to choose from list taskList with title "Janitor" with prompt "Deselect anything you do NOT want cleaned (all selected = clean all):" default items defaultList with multiple selections allowed
+  set chosen to choose from list taskList with title "Janitor" with prompt "Check what you want cleaned (none checked). Use Check all / Uncheck all at the top:" default items defaultList with multiple selections allowed
   if chosen is false then
     return "CANCEL"
   end if
@@ -146,62 +152,53 @@ end try
 EOF
 )"
 
-  if [[ "$chosen" == "CANCEL" || -z "$chosen" ]]; then
-    echo "CANCEL"
-    return 0
-  fi
+    if [[ "$chosen" == "CANCEL" ]]; then
+      echo "CANCEL"
+      return 0
+    fi
 
-  # Extract ids (text before " — ")
-  local selected_ids=() row
-  while IFS= read -r row; do
-    [[ -z "$row" ]] && continue
-    selected_ids+=("${row%% — *}")
-  done <<<"$chosen"
+    has_check_all=0
+    has_uncheck_all=0
+    picked=()
+    while IFS= read -r row; do
+      [[ -z "$row" ]] && continue
+      if [[ "$row" == "$CHECK_ALL" ]]; then
+        has_check_all=1
+      elif [[ "$row" == "$UNCHECK_ALL" ]]; then
+        has_uncheck_all=1
+      else
+        picked+=("$row")
+      fi
+    done <<<"$chosen"
 
-  if [[ ${#selected_ids[@]} -eq 0 ]]; then
-    echo "EMPTY"
-    return 0
-  fi
+    if [[ "$has_check_all" -eq 1 ]]; then
+      selected_defaults=("${items[@]}")
+      continue
+    fi
+    if [[ "$has_uncheck_all" -eq 1 ]]; then
+      selected_defaults=()
+      continue
+    fi
 
-  local IFS=,
-  echo "${selected_ids[*]}"
-}
+    if [[ ${#picked[@]} -eq 0 ]]; then
+      dialog \
+        "Nothing checked.
 
-# Compare assess ids vs selected → permanently disable deselected if user agrees
-maybe_remember_optouts() {
-  local selected_csv="$1"
-  local assess="$JANITOR_ASSESS_TSV"
-  local deselected=() id label freed status
-  while IFS=$'\t' read -r id label freed status; do
-    [[ "$id" == "id" ]] && continue
-    [[ -z "$id" ]] && continue
-    [[ "${freed:-0}" -gt 0 ]] || continue
-    case ",${selected_csv}," in
-      *",${id},"*) ;;
-      *) deselected+=("$id") ;;
-    esac
-  done <"$assess"
+Check at least one task to clean, or Cancel." \
+        "OK" "OK" >/dev/null
+      selected_defaults=()
+      continue
+    fi
 
-  [[ ${#deselected[@]} -gt 0 ]] || return 0
-
-  local list
-  list="$(printf '%s, ' "${deselected[@]}")"
-  list="${list%, }"
-  local ans
-  ans="$(dialog \
-    "Remember these opt-outs for next time?
-
-${list}
-
-Saved in ~/.config/janitor/disabled" \
-    "Not now" "Not now" "Remember")"
-  if [[ "$ans" == "Remember" ]]; then
-    local d
-    for d in "${deselected[@]}"; do
-      task_disable "$d" >/dev/null
+    selected_ids=()
+    for row in "${picked[@]}"; do
+      selected_ids+=("${row%% — *}")
     done
-    notify "Janitor" "Saved ${#deselected[@]} opt-out(s)"
-  fi
+
+    local IFS=,
+    echo "${selected_ids[*]}"
+    return 0
+  done
 }
 
 # --- Phase 0 ---
@@ -214,8 +211,8 @@ else
 Never touches Documents or Downloads.
 
 1) Assess
-2) Uncheck what to keep
-3) Clean only what you left checked" \
+2) Check what to clean (none checked by default)
+3) Clean only what you checked" \
     "Assess" "Cancel" "Assess" "Assess (deep)")"
 fi
 
@@ -252,8 +249,6 @@ ${none_log}"
     exit 0
     ;;
 esac
-
-maybe_remember_optouts "$selected"
 
 confirm="$(dialog \
   "Ready to clean selected tasks:

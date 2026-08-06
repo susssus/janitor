@@ -32,7 +32,7 @@ Usage:
 
 Commands:
   clean     Run cleanup (always writes a session log)
-  desktop   GUI: assess → pick tasks (opt-out) → clean
+  desktop   GUI: assess → check tasks (opt-in) → clean
   status    Disk, RAM, reclaimable sizes
   tasks     List cleaners and enabled/disabled state
   disable   Permanently opt out of a task (saved in config)

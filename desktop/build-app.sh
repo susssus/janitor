@@ -54,7 +54,19 @@ cat >"$MACOS_DIR/Janitor" <<EOF
 # Launcher — two-phase Janitor (assess → confirm → clean)
 exec "$ROOT/bin/janitor-desktop"
 EOF
-chmod +x "$MACOS_DIR/Janitor" "$ROOT/bin/janitor-desktop"
+chmod +x "$MACOS_DIR/Janitor" "$ROOT/bin/janitor-desktop" "$ROOT/bin/janitor-sweep-hud" "$ROOT/bin/janitor-choose-tasks"
+
+# Compile floating sweep overlay (Swift). Fail soft if swiftc unavailable.
+HUD_SWIFT="$ROOT/desktop/sweep-hud/main.swift"
+HUD_BIN="$ROOT/bin/janitor-sweep-hud.appbin"
+if [[ -f "$HUD_SWIFT" ]] && command -v swiftc >/dev/null 2>&1; then
+  echo "Compiling sweep HUD…"
+  swiftc -O -o "$HUD_BIN" "$HUD_SWIFT"
+  chmod +x "$HUD_BIN"
+  echo "HUD binary: $HUD_BIN"
+else
+  echo "Warning: swiftc/HUD source missing — overlay will use JXA fallback" >&2
+fi
 
 # Bump mtime so Finder/Dock refresh the icon
 touch "$APP_DIR"

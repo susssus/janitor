@@ -4,6 +4,7 @@ set -euo pipefail
 
 JANITOR_HOME="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 JANITOR_BIN="$JANITOR_HOME/bin/janitor"
+JANITOR_HUD="$JANITOR_HOME/bin/janitor-sweep-hud"
 
 # shellcheck source=../lib/common.sh
 source "$JANITOR_HOME/lib/common.sh"
@@ -13,8 +14,19 @@ source "$JANITOR_HOME/lib/config.sh"
 janitor_augment_path
 config_ensure
 
+DESKTOP_DEBUG_LOG="${JANITOR_LOG_DIR}/desktop-debug.log"
+
 osascript_escape() {
   printf '%s' "$1" | sed 's/\\/\\\\/g; s/"/\\"/g'
+}
+
+dbg() {
+  local msg="$*"
+  local line
+  line="$(date '+%Y-%m-%d %H:%M:%S') [pid=$$] $msg"
+  mkdir -p "$JANITOR_LOG_DIR" 2>/dev/null || true
+  printf '%s\n' "$line" >>"$DESKTOP_DEBUG_LOG" 2>/dev/null || true
+  printf '%s\n' "$line" >&2 || true
 }
 
 dialog() {
@@ -44,30 +56,71 @@ notify() {
 }
 
 SWEEP_ANIM_PID=""
+SWEEP_READY_FILE=""
 
-# Cycle 🧹 frames in Notification Center while a blocking clean/assess runs.
+# Floating desktop HUD (bright orange NSPanel at screen-saver level).
+# Starts immediately; does not block the caller for long — work can begin in parallel.
 sweep_anim_start() {
   local phase="${1:-Sweeping}"
-  (
-    local frames=("🧹" "🧹 💨" "💨 🧹" "✨ 🧹")
-    local i=0 n=${#frames[@]}
-    while true; do
-      notify "${frames[$i]} Janitor" "${phase} underway…"
-      i=$(( (i + 1) % n ))
-      sleep 0.75
-    done
-  ) &
+  sweep_anim_stop
+  if [[ ! -x "$JANITOR_HUD" ]]; then
+    dbg "HUD missing or not executable: $JANITOR_HUD — falling back to notifications"
+    (
+      local frames=("🧹" "🧹 💨" "💨 🧹" "✨ 🧹")
+      local i=0 n=${#frames[@]}
+      while true; do
+        notify "${frames[$i]} Janitor" "${phase} underway…"
+        i=$(( (i + 1) % n ))
+        sleep 0.75
+      done
+    ) &
+    SWEEP_ANIM_PID=$!
+    dbg "fallback notify anim started pid=$SWEEP_ANIM_PID phase=$phase"
+    return 0
+  fi
+
+  SWEEP_READY_FILE="$(mktemp "${TMPDIR:-/tmp}/janitor-hud-ready.XXXXXX")"
+  rm -f "$SWEEP_READY_FILE"
+  export JANITOR_HUD_LOG="$DESKTOP_DEBUG_LOG"
+
+  # Launch HUD first thing — before any heavy work
+  "$JANITOR_HUD" "$phase" "$SWEEP_READY_FILE" >>"$DESKTOP_DEBUG_LOG" 2>&1 &
   SWEEP_ANIM_PID=$!
+  dbg "HUD started pid=$SWEEP_ANIM_PID phase=$phase ready=$SWEEP_READY_FILE"
+
+  # Brief yield so the first frame can map (~300ms max). Do not stall the clean/assess.
+  local i=0
+  while [[ $i -lt 6 ]]; do
+    [[ -f "$SWEEP_READY_FILE" ]] && break
+    kill -0 "$SWEEP_ANIM_PID" 2>/dev/null || break
+    sleep 0.05
+    i=$((i + 1))
+  done
+  if [[ -f "$SWEEP_READY_FILE" ]]; then
+    dbg "HUD ready confirmed"
+  else
+    dbg "HUD still warming (continuing work in parallel)"
+  fi
 }
 
 sweep_anim_stop() {
-  [[ -z "${SWEEP_ANIM_PID:-}" ]] && return 0
-  kill "$SWEEP_ANIM_PID" 2>/dev/null || true
-  wait "$SWEEP_ANIM_PID" 2>/dev/null || true
+  local pid="${SWEEP_ANIM_PID:-}"
   SWEEP_ANIM_PID=""
+  if [[ -n "${SWEEP_READY_FILE:-}" ]]; then
+    rm -f "$SWEEP_READY_FILE" 2>/dev/null || true
+    SWEEP_READY_FILE=""
+  fi
+  [[ -z "$pid" ]] && return 0
+  dbg "HUD stop requested pid=$pid"
+  # Kill wrapper and any children (swift / osascript)
+  pkill -P "$pid" 2>/dev/null || true
+  kill "$pid" 2>/dev/null || true
+  wait "$pid" 2>/dev/null || true
+  pkill -f 'janitor-sweep-hud' 2>/dev/null || true
+  dbg "HUD stopped pid=$pid"
 }
 
-trap 'sweep_anim_stop' EXIT
+trap 'dbg "EXIT trap"; sweep_anim_stop' EXIT
 
 # Task bullet lines from a session log (• npm cache  freed 1.2G …).
 log_task_summary() {
@@ -93,115 +146,108 @@ display dialog "$(osascript_escape "$message")" with title "🧹 Janitor" button
 EOF
 }
 
-# Build AppleScript list from last-assess.tsv; user checks what to clean (none by default).
-# Top rows: Check all / Uncheck all (re-open list with updated selection).
+# Build checkbox UI from last-assess.tsv; user checks what to clean (none by default).
+# Real per-row checkboxes via janitor-choose-tasks (Cocoa), not AppleScript list highlight.
 # Prints selected task ids as comma-separated on stdout; CANCEL / EMPTY on special cases.
 choose_tasks() {
   local assess="$JANITOR_ASSESS_TSV"
   if [[ ! -f "$assess" ]]; then
+    dbg "choose_tasks: assess TSV missing"
     echo "EMPTY"
     return 0
   fi
 
-  local items=() id label freed status display
+  local items=() id label freed status title blurb
   while IFS=$'\t' read -r id label freed status; do
     [[ "$id" == "id" ]] && continue
     [[ -z "$id" ]] && continue
     # Only offer tasks that would reclaim something
     [[ "${freed:-0}" -gt 0 ]] || continue
-    display="${id} — ${label} ($(fmt_kb "$freed"))"
-    items+=("$display")
+    title="${id} — ${label} ($(fmt_kb "$freed"))"
+    blurb="$(task_blurb "$id")"
+    # TSV for chooser: id, title, blurb (blurb may be empty)
+    items+=("${id}"$'\t'"${title}"$'\t'"${blurb}")
   done <"$assess"
 
   if [[ ${#items[@]} -eq 0 ]]; then
+    dbg "choose_tasks: no reclaimable tasks"
     echo "EMPTY"
     return 0
   fi
 
-  local CHECK_ALL="☑ Check all"
-  local UNCHECK_ALL="☐ Uncheck all"
-  local selected_defaults=() # all unchecked by default
-  local chosen row it list_lit def_lit
-  local has_check_all has_uncheck_all picked selected_ids
+  dbg "choose_tasks: offering ${#items[@]} tasks"
+
+  local chooser="$JANITOR_HOME/bin/janitor-choose-tasks"
+  if [[ ! -x "$chooser" ]]; then
+    dbg "choose_tasks: chooser missing: $chooser"
+    alert "Janitor chooser missing:
+
+$chooser
+
+Re-run install or chmod +x bin/janitor-choose-tasks"
+    echo "CANCEL"
+    return 0
+  fi
+
+  local items_file chosen row selected_ids
+  items_file="$(mktemp "${TMPDIR:-/tmp}/janitor-choose.XXXXXX")"
+  if [[ ${#items[@]} -gt 0 ]]; then
+    printf '%s\n' "${items[@]}" >"$items_file"
+  else
+    : >"$items_file"
+  fi
 
   while true; do
-    list_lit="\"$(osascript_escape "$CHECK_ALL")\", \"$(osascript_escape "$UNCHECK_ALL")\""
-    for it in "${items[@]}"; do
-      list_lit+=", \"$(osascript_escape "$it")\""
-    done
+    dbg "choose_tasks: launching checkbox UI file=$items_file"
+    chosen="$("$chooser" "$items_file" 2>>"$DESKTOP_DEBUG_LOG" || true)"
+    dbg "choose_tasks: raw choice=<<${chosen}>>"
 
-    def_lit=""
-    for it in "${selected_defaults[@]}"; do
-      [[ -n "$def_lit" ]] && def_lit+=", "
-      def_lit+="\"$(osascript_escape "$it")\""
-    done
-
-    chosen="$(osascript <<EOF
-try
-  set taskList to {${list_lit}}
-  set defaultList to {${def_lit}}
-  set chosen to choose from list taskList with title "Janitor" with prompt "Check what you want cleaned (none checked). Use Check all / Uncheck all at the top:" default items defaultList with multiple selections allowed
-  if chosen is false then
-    return "CANCEL"
-  end if
-  set text item delimiters of AppleScript to linefeed
-  return chosen as text
-on error number -128
-  return "CANCEL"
-end try
-EOF
-)"
-
-    if [[ "$chosen" == "CANCEL" ]]; then
+    if [[ "$chosen" == "CANCEL" || -z "$chosen" ]]; then
+      rm -f "$items_file"
       echo "CANCEL"
       return 0
     fi
 
-    has_check_all=0
-    has_uncheck_all=0
-    picked=()
-    while IFS= read -r row; do
-      [[ -z "$row" ]] && continue
-      if [[ "$row" == "$CHECK_ALL" ]]; then
-        has_check_all=1
-      elif [[ "$row" == "$UNCHECK_ALL" ]]; then
-        has_uncheck_all=1
-      else
-        picked+=("$row")
-      fi
-    done <<<"$chosen"
-
-    if [[ "$has_check_all" -eq 1 ]]; then
-      selected_defaults=("${items[@]}")
-      continue
-    fi
-    if [[ "$has_uncheck_all" -eq 1 ]]; then
-      selected_defaults=()
-      continue
-    fi
-
-    if [[ ${#picked[@]} -eq 0 ]]; then
+    if [[ "$chosen" == "__EMPTY__" ]]; then
       dialog \
         "Nothing checked.
 
 Check at least one task to clean, or Cancel." \
         "OK" "OK" >/dev/null
-      selected_defaults=()
       continue
     fi
 
     selected_ids=()
-    for row in "${picked[@]}"; do
-      selected_ids+=("${row%% — *}")
-    done
+    while IFS= read -r row; do
+      [[ -z "$row" ]] && continue
+      # Chooser returns bare task ids (one per line)
+      selected_ids+=("$row")
+    done <<<"$chosen"
 
+    if [[ ${#selected_ids[@]} -eq 0 ]]; then
+      dialog \
+        "Nothing checked.
+
+Check at least one task to clean, or Cancel." \
+        "OK" "OK" >/dev/null
+      continue
+    fi
+
+    rm -f "$items_file"
     local IFS=,
     echo "${selected_ids[*]}"
     return 0
   done
 }
 
+dbg "=== janitor-desktop start ==="
+dbg "JANITOR_HOME=$JANITOR_HOME"
+dbg "HUD=$JANITOR_HUD executable=$([[ -x $JANITOR_HUD ]] && echo yes || echo no)"
+dbg "DESKTOP_DEEP=${JANITOR_DESKTOP_DEEP:-0}"
+
 # --- Phase 0 ---
+# Use a string (not empty array) so bash 3.2 + set -u never trips on "${arr[@]}".
+DEEP_FLAG=""
 if [[ "${JANITOR_DESKTOP_DEEP:-0}" == "1" ]]; then
   choice="Assess (deep)"
 else
@@ -211,28 +257,36 @@ else
 Never touches Documents or Downloads.
 
 1) Assess
-2) Check what to clean (none checked by default)
-3) Clean only what you checked" \
+2) Check what to clean (checkbox on each row)
+3) Sweep now — cleans only what you checked" \
     "Assess" "Cancel" "Assess" "Assess (deep)")"
 fi
 
+dbg "phase0 choice=$choice"
+
 case "$choice" in
   Cancel|"") exit 0 ;;
-  "Assess (deep)") DEEP_FLAG=(--deep) ;;
-  *) DEEP_FLAG=() ;;
+  "Assess (deep)") DEEP_FLAG="--deep" ;;
+  *) DEEP_FLAG="" ;;
 esac
 
+# Overlay first — immediately after Assess / Assess (deep)
 sweep_anim_start "Assessing"
 
 # --- Phase 1: assess ---
-assess_out="$("$JANITOR_BIN" clean --dry-run "${DEEP_FLAG[@]}" 2>&1)" || true
+dbg "assess begin deep_flag=${DEEP_FLAG:-<none>}"
+# shellcheck disable=SC2086
+assess_out="$("$JANITOR_BIN" clean --dry-run $DEEP_FLAG 2>&1)" || true
 sweep_anim_stop
+dbg "assess done"
 assess_log="$("$JANITOR_BIN" log --path 2>/dev/null || true)"
 freed_line="$(printf '%s\n' "$assess_out" | grep -E '^Freed \(measured\):' | tail -1 || true)"
 [[ -z "$freed_line" ]] && freed_line="Freed (measured): unknown"
+dbg "assess freed_line=$freed_line log=$assess_log"
 
 # --- Phase 1b: checkboxes ---
 selected="$(choose_tasks)"
+dbg "selected=$selected"
 case "$selected" in
   CANCEL)
     notify "Janitor" "Cleanup cancelled — nothing deleted."
@@ -250,28 +304,14 @@ ${none_log}"
     ;;
 esac
 
-confirm="$(dialog \
-  "Ready to clean selected tasks:
-
-${selected}
-
-${freed_line} (full assess; only selected will run)
-
-Proceed?" \
-  "Cancel" "Cancel" "Clean now")"
-
-case "$confirm" in
-  "Clean now") ;;
-  *)
-    notify "Janitor" "Cleanup cancelled — nothing deleted."
-    exit 0
-    ;;
-esac
-
-# --- Phase 2 ---
+# Checkbox OK is the confirm — no second “Proceed?” dialog.
+# Overlay starts immediately, then clean runs.
 sweep_anim_start "Sweeping"
-clean_out="$("$JANITOR_BIN" clean "${DEEP_FLAG[@]}" --only "$selected" 2>&1)" || true
+dbg "clean begin only=$selected"
+# shellcheck disable=SC2086
+clean_out="$("$JANITOR_BIN" clean $DEEP_FLAG --only "$selected" 2>&1)" || true
 sweep_anim_stop
+dbg "clean done"
 clean_log="$("$JANITOR_BIN" log --path 2>/dev/null || true)"
 result_line="$(printf '%s\n' "$clean_out" | grep -E '^Freed \(measured\):' | tail -1 || true)"
 [[ -z "$result_line" ]] && result_line="Cleanup finished."
@@ -289,3 +329,4 @@ Full log:
 ${none_log}"
 
 notify "🧹 Janitor" "Hooray! ${result_line}"
+dbg "=== janitor-desktop end ==="

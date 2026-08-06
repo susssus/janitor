@@ -11,8 +11,8 @@ Mac development housekeeper. Reclaims disk from **`~/Library`** caches/logs/dev 
 Puts **Janitor.app** on your Desktop. Double-click:
 
 1. **Assess** (or Assess deep) — dry-run; nothing deleted  
-2. **Check** what to clean (none checked by default; Check all / Uncheck all at the top)  
-3. Confirm → **Clean now** runs only what you checked  
+2. **Check** what to clean — checkbox on each row (none checked by default; Check all / Uncheck all buttons)  
+3. **Sweep now** — broom overlay starts immediately; cleans only what you checked  
 
 Permanent skips: `janitor disable <id>` (saved in `~/.config/janitor/disabled`).
 
@@ -63,6 +63,7 @@ Every `clean` (including dry-run and launchd) writes:
 | `~/Library/Logs/janitor/clean-YYYYMMDD-HHMMSS.log` | Full session |
 | `~/Library/Logs/janitor/latest.log` | Symlink to last run |
 | `~/Library/Logs/janitor/history.tsv` | Append-only per-task rows |
+| `~/Library/Logs/janitor/desktop-debug.log` | Desktop GUI / HUD debug trail |
 
 Each task records path, before/after KB, freed KB, and status. The summary uses measured `du` totals; `df` delta is informational only (APFS is noisy).
 
@@ -97,6 +98,10 @@ Still never touches Documents/Downloads, Docker.raw, full Cursor Application Sup
 ```
 bin/janitor
 bin/janitor-desktop   # assess → checkbox opt-in → clean
+bin/janitor-choose-tasks  # Cocoa per-row checkbox picker
+bin/janitor-sweep-hud # launches floating broom overlay during assess/clean
+bin/janitor-sweep-hud.appbin  # compiled Swift overlay (built by desktop/build-app.sh)
+desktop/sweep-hud/    # Swift source for the overlay
 lib/common.sh
 lib/config.sh         # ~/.config/janitor + portable PATH
 lib/cleaners.sh

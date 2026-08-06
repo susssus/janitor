@@ -45,6 +45,48 @@ JANITOR_TASK_LABELS=(
   "Stremio5 cache"
 )
 
+# Brief “what / when to keep” notes for the desktop checkbox UI (same order as IDs).
+JANITOR_TASK_BLURBS=(
+  "Old brew downloads & bottles. Safe — brew re-fetches when needed."
+  "npm package tarball cache. Next npm install may re-download."
+  "pip wheel/HTTP cache. Safe; packages re-download on next install."
+  "pip3 wheel/HTTP cache. Safe; packages re-download on next install."
+  "~/.gradle/caches build deps. Next Gradle/Android build re-downloads."
+  "Gradle daemon working dirs. Daemons restart on next build."
+  "Incomplete Android SDK download leftovers. Safe to clear."
+  "Android tooling cache under ~/.android. Regenerates as needed."
+  "Emulator qemu temp files. Safe if the emulator is not mid-run."
+  "Xcode build products. First rebuild after this will be slower."
+  "Playwright browser binaries for tests. Re-downloaded on next test run."
+  "Google/Chrome app caches (not your bookmarks or passwords)."
+  "Downloaded HF models/datasets. Large; only clear if you can re-fetch."
+  "Stremio streaming cache. May re-buffer after clearing."
+  "CocoaPods specs/pods cache. Next pod install re-fetches."
+  "Dart analyzer cache. Regenerates when you open a Dart project."
+  "Dart/Flutter package cache. Next pub get / flutter pub get re-fetches."
+  "Removes dead/unavailable iOS simulators only — keeps working ones."
+  "macOS Library/Logs older than 14 days. Does not touch app data."
+  "Cursor editor caches only — not your project files."
+  "Claude desktop auto-update leftovers. Safe."
+  "Mozilla app cache. Safe; pages may load slightly slower once."
+  "Firefox cache. Safe; pages may load slightly slower once."
+  "Canva updater leftovers. Safe."
+  "Steam download/cache leftovers. Won’t remove installed games."
+  "Stremio5 app cache. May re-buffer after clearing."
+)
+
+# Lookup blurb by task id (empty string if unknown).
+task_blurb() {
+  local want="$1" i
+  for i in "${!JANITOR_TASK_IDS[@]}"; do
+    if [[ "${JANITOR_TASK_IDS[$i]}" == "$want" ]]; then
+      echo "${JANITOR_TASK_BLURBS[$i]}"
+      return 0
+    fi
+  done
+  echo ""
+}
+
 config_ensure() {
   mkdir -p "$JANITOR_CONFIG_DIR"
   if [[ ! -f "$JANITOR_DISABLED_FILE" ]]; then

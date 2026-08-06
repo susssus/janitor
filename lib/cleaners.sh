@@ -1,71 +1,61 @@
 #!/bin/bash
-# Cleanup tasks — Library-first, allowlisted paths only
+# Cleanup tasks — Library-first, allowlisted paths only (dev caches)
 
-# Status registry: "kb|label|path" lines collected then sorted
+# Status / hog rows: "kb|id|label|path"
 STATUS_ROWS=()
 
-status_add() {
-  local label="$1" path="$2" kb
-  if [[ ! -e "$path" ]]; then
+status_add_hog() {
+  local id="$1" label="$2" path="$3" kb
+  if [[ -z "$path" || ! -e "$path" ]]; then
     return 0
   fi
   kb="$(du_kb "$path")"
-  STATUS_ROWS+=("${kb}|${label}|${path}")
+  STATUS_ROWS+=("${kb}|${id}|${label}|${path}")
 }
 
 report_sizes() {
   STATUS_ROWS=()
+  local i id label path
 
-  # Default + deep measure paths (for status visibility)
-  status_add "Homebrew cache" "$(brew --cache 2>/dev/null || echo /nonexistent)"
-  status_add "npm cache (~/.npm)" "$HOME/.npm"
-  status_add "pip cache" "$HOME/Library/Caches/pip"
-  status_add "Gradle caches" "$HOME/.gradle/caches"
-  status_add "Gradle daemon" "$HOME/.gradle/daemon"
-  status_add "Android SDK downloads" "$HOME/Library/Android/sdk/.downloadIntermediates"
-  status_add "Android cache" "$HOME/.android/cache"
-  status_add "Android emulator qemu temps" "$HOME/Library/Android/sdk/emulator/qemu"
-  status_add "Xcode DerivedData" "$HOME/Library/Developer/Xcode/DerivedData"
-  status_add "Playwright" "$HOME/Library/Caches/ms-playwright"
-  status_add "Google / Chrome" "$HOME/Library/Caches/Google"
-  status_add "Hugging Face" "$HOME/.cache/huggingface"
-  status_add "Stremio cache" "$HOME/Library/Application Support/stremio-server/stremio-cache"
-  status_add "CocoaPods" "$HOME/Library/Caches/CocoaPods"
-  status_add "Dart pub-cache" "$HOME/.pub-cache"
-  status_add "Dart analysis server" "$HOME/.dartServer"
-  status_add "CoreSimulator" "$HOME/Library/Developer/CoreSimulator"
-  status_add "Library/Logs" "$HOME/Library/Logs"
-  status_add "Cursor caches" "$HOME/Library/Caches/Cursor"
-  # Deep targets (shown always so you see the hogs)
-  status_add "Claude ShipIt cache" "$HOME/Library/Caches/com.anthropic.claudefordesktop.ShipIt"
-  status_add "Mozilla cache" "$HOME/Library/Caches/Mozilla"
-  status_add "Firefox cache" "$HOME/Library/Caches/Firefox"
-  status_add "Canva updater" "$HOME/Library/Caches/canva-updater"
-  status_add "Steam cache" "$HOME/Library/Caches/Steam"
-  status_add "Stremio5 cache" "$HOME/Library/Caches/com.westbridge.stremio5-mac"
-  # Report-only big dirs (not cleaned by default)
-  status_add "Cursor Application Support (report only)" "$HOME/Library/Application Support/Cursor"
-  status_add "Docker Containers (report only)" "$HOME/Library/Containers/com.docker.docker"
-  status_add "Android SDK tree (report only)" "$HOME/Library/Android"
+  for i in "${!JANITOR_TASK_IDS[@]}"; do
+    id="${JANITOR_TASK_IDS[$i]}"
+    label="${JANITOR_TASK_LABELS[$i]}"
+    path="$(hog_measure_path "$id" 2>/dev/null || true)"
+    status_add_hog "$id" "$label" "$path"
+  done
+
+  # Report-only big dirs (never cleaned)
+  status_add_hog "_report_cursor_as" "Cursor Application Support (report only)" \
+    "$HOME/Library/Application Support/Cursor"
+  status_add_hog "_report_docker" "Docker Containers (report only)" \
+    "$HOME/Library/Containers/com.docker.docker"
+  status_add_hog "_report_android_sdk" "Android SDK tree (report only)" \
+    "$HOME/Library/Android"
 
   if [[ ${#STATUS_ROWS[@]} -eq 0 ]]; then
-    echo "  (nothing found)"
+    echo "  (no hogs found)"
     return 0
   fi
 
-  local row kb label path rest
-  # Sort numeric descending by kb
+  local row kb id label path rest
   while IFS= read -r row; do
     [[ -z "$row" ]] && continue
     kb="${row%%|*}"
     rest="${row#*|}"
+    id="${rest%%|*}"
+    rest="${rest#*|}"
     label="${rest%%|*}"
     path="${rest#*|}"
-    printf "  %8s  %s\n" "$(fmt_kb "$kb")" "$label"
+    if [[ "$id" == _report_* ]]; then
+      printf '  %8s  %s\n' "$(fmt_kb "$kb")" "$label"
+      printf '           %s\n' "$path"
+    else
+      hog_row "$id" "$(fmt_kb "$kb")" "$label"
+    fi
   done < <(printf '%s\n' "${STATUS_ROWS[@]}" | sort -t'|' -k1,1nr)
 }
 
-# --- Individual cleaners ---
+# --- Cmd cleaners (catalog kind=cmd) ---
 
 clean_homebrew() {
   if ! command -v brew >/dev/null 2>&1; then
@@ -87,80 +77,29 @@ clean_npm() {
     npm cache clean --force
 }
 
-clean_pip() {
-  if command -v pip3 >/dev/null 2>&1; then
-    run_cmd_task "pip3" "pip3 cache" "$HOME/Library/Caches/pip" \
-      pip3 cache purge
-  elif command -v pip >/dev/null 2>&1; then
-    run_cmd_task "pip" "pip cache" "$HOME/Library/Caches/pip" \
-      pip cache purge
-  else
-    log_skip "pip" "pip cache" "pip/pip3 not found"
-  fi
-}
-
-clean_gradle() {
-  run_path_task "gradle" "Gradle caches" "$HOME/.gradle/caches"
-  run_path_task "gradle_daemon" "Gradle daemon" "$HOME/.gradle/daemon" contents
-}
-
-clean_android_downloads() {
-  run_path_task "android_sdk_dl" "Android SDK downloads" \
-    "$HOME/Library/Android/sdk/.downloadIntermediates"
-}
-
-clean_android_cache() {
-  run_path_task "android_cache" "Android cache" "$HOME/.android/cache"
-}
-
-# Emulator qemu scratch (safe temps; keeps the emulator binary tree)
-clean_android_qemu() {
-  run_path_task "android_qemu" "Android emulator qemu temps" \
-    "$HOME/Library/Android/sdk/emulator/qemu" contents
-}
-
-clean_xcode_derived() {
-  run_path_task "xcode_derived" "Xcode DerivedData" \
-    "$HOME/Library/Developer/Xcode/DerivedData" contents
-}
-
-clean_playwright() {
-  run_path_task "playwright" "Playwright cache" \
-    "$HOME/Library/Caches/ms-playwright"
-}
-
-clean_google() {
-  run_path_task "google" "Google cache" "$HOME/Library/Caches/Google"
-}
-
-clean_huggingface() {
-  run_path_task "huggingface" "Hugging Face cache" \
-    "$HOME/.cache/huggingface"
-}
-
-clean_stremio() {
-  local path="$HOME/Library/Application Support/stremio-server/stremio-cache"
-  if pgrep -xq Stremio 2>/dev/null \
-    || pgrep -fq 'Stremio\.app|stremio-server|/stremio$' 2>/dev/null; then
-    log_skip "stremio" "Stremio cache" "Stremio is running" "$path"
+clean_pip3() {
+  if ! command -v pip3 >/dev/null 2>&1; then
+    log_skip "pip3" "pip3 cache" "pip3 not found"
     return 0
   fi
-  run_path_task "stremio" "Stremio cache" "$path" contents
+  run_cmd_task "pip3" "pip3 cache" "$HOME/Library/Caches/pip" \
+    pip3 cache purge
 }
 
-clean_cocoapods() {
-  run_path_task "cocoapods" "CocoaPods cache" \
-    "$HOME/Library/Caches/CocoaPods"
-}
-
-clean_dart_server() {
-  run_path_task "dart_server" "Dart analysis server cache" \
-    "$HOME/.dartServer"
+clean_pip() {
+  if command -v pip3 >/dev/null 2>&1; then
+    log_skip "pip" "pip cache" "pip3 present — skipped"
+    return 0
+  fi
+  if ! command -v pip >/dev/null 2>&1; then
+    log_skip "pip" "pip cache" "pip not found"
+    return 0
+  fi
+  run_cmd_task "pip" "pip cache" "$HOME/Library/Caches/pip" \
+    pip cache purge
 }
 
 clean_pub_cache() {
-  # Prefer dart/flutter pub cache clean when available; else leave pub-cache alone
-  # (full rm of ~/.pub-cache is painful for Flutter projects)
   if command -v dart >/dev/null 2>&1; then
     run_cmd_task "pub_cache" "Dart pub cache" "$HOME/.pub-cache" \
       dart pub cache clean --force
@@ -209,8 +148,8 @@ clean_old_logs() {
       ! -path "$logs_root/janitor/*" \
       -exec du -sk {} + 2>/dev/null | awk '{s+=$1} END {print s+0}')" || estimate=0
     freed="$estimate"
-    log_echo "• $label  [dry-run]  would free ~$(fmt_kb "$freed")"
-    log_line "  path=$logs_root before_kb=$before after_kb=0 freed_kb=$freed status=dry-run"
+    log_task dry "$label" "would free ~$(fmt_kb "$freed")" "$logs_root"
+    log_line "  path=$(abs_path "$logs_root") before_kb=$before after_kb=0 freed_kb=$freed status=dry-run"
     history_append "$ts" "$id" "$logs_root" "$before" 0 "$freed" "dry-run"
     assess_append "$id" "$label" "$freed" "dry-run"
     TOTAL_FREED_KB=$((TOTAL_FREED_KB + freed))
@@ -230,62 +169,67 @@ clean_old_logs() {
   freed=$(( before - after ))
   if [[ "$freed" -lt 0 ]]; then freed=0; fi
   status="ok"
-  log_echo "• $label  freed $(fmt_kb "$freed")"
-  log_line "  path=$logs_root before_kb=$before after_kb=$after freed_kb=$freed status=$status"
+  log_task ok "$label" "freed $(fmt_kb "$freed")" "$logs_root"
+  log_line "  path=$(abs_path "$logs_root") before_kb=$before after_kb=$after freed_kb=$freed status=$status"
   history_append "$ts" "$id" "$logs_root" "$before" "$after" "$freed" "$status"
   assess_append "$id" "$label" "$freed" "$status"
   TOTAL_FREED_KB=$((TOTAL_FREED_KB + freed))
   TOTAL_TASKS=$((TOTAL_TASKS + 1))
 }
 
-clean_cursor_caches() {
-  run_path_task "cursor_caches" "Cursor caches" "$HOME/Library/Caches/Cursor"
+# Run one catalog/custom path hog via run_path_task
+clean_path_hog() {
+  local i="$1"
+  local id="${JANITOR_TASK_IDS[$i]}"
+  local label="${JANITOR_TASK_LABELS[$i]}"
+  local path="${JANITOR_TASK_PATHS[$i]}"
+  local mode="${JANITOR_TASK_MODES[$i]}"
+  run_path_task "$id" "$label" "$path" "$mode"
 }
 
-# --deep only ---
-
-clean_deep_caches() {
-  local paths=(
-    "shipit|$HOME/Library/Caches/com.anthropic.claudefordesktop.ShipIt|Claude ShipIt cache"
-    "mozilla|$HOME/Library/Caches/Mozilla|Mozilla cache"
-    "firefox|$HOME/Library/Caches/Firefox|Firefox cache"
-    "canva|$HOME/Library/Caches/canva-updater|Canva updater cache"
-    "steam|$HOME/Library/Caches/Steam|Steam cache"
-    "stremio5|$HOME/Library/Caches/com.westbridge.stremio5-mac|Stremio5 cache"
-  )
-  local entry id path label
-  for entry in "${paths[@]}"; do
-    id="${entry%%|*}"
-    rest="${entry#*|}"
-    path="${rest%%|*}"
-    label="${rest#*|}"
-    run_path_task "$id" "$label" "$path"
-  done
+# Dispatch a cmd hog by id
+clean_cmd_hog() {
+  local id="$1"
+  case "$id" in
+    homebrew) clean_homebrew ;;
+    npm) clean_npm ;;
+    pip) clean_pip ;;
+    pip3) clean_pip3 ;;
+    pub_cache) clean_pub_cache ;;
+    simctl) clean_simctl ;;
+    old_logs) clean_old_logs ;;
+    *)
+      log_skip "$id" "$(task_label "$id")" "no cmd cleaner"
+      ;;
+  esac
 }
 
 run_all_cleaners() {
-  clean_homebrew
-  clean_npm
-  clean_pip
-  clean_gradle
-  clean_android_downloads
-  clean_android_cache
-  clean_android_qemu
-  clean_xcode_derived
-  clean_playwright
-  clean_google
-  clean_huggingface
-  clean_stremio
-  clean_cocoapods
-  clean_dart_server
-  clean_pub_cache
-  clean_simctl
-  clean_old_logs
-  clean_cursor_caches
+  local i id kind
+  local deep_banner=0
 
-  if [[ "${DEEP:-0}" -eq 1 ]]; then
-    log_echo ""
-    log_echo "— deep profile —"
-    clean_deep_caches
-  fi
+  for i in "${!JANITOR_TASK_IDS[@]}"; do
+    id="${JANITOR_TASK_IDS[$i]}"
+    kind="${JANITOR_TASK_KINDS[$i]}"
+
+    if [[ -n "${JANITOR_ONLY:-}" ]]; then
+      # --only: run matching ids only; no skip spam for the rest
+      should_run "$id" || continue
+    elif ! should_run "$id" && ! hog_is_in_enabled_set "$id"; then
+      # Silent skip: default-off catalog hogs unless adopted or --deep
+      continue
+    fi
+
+    if hog_unlocked_by_deep "$id" && [[ "$deep_banner" -eq 0 ]]; then
+      log_echo ""
+      log_echo "${C_CYAN}${C_BOLD}── deep profile ──${C_RESET}"
+      deep_banner=1
+    fi
+
+    if [[ "$kind" == "path" ]]; then
+      clean_path_hog "$i"
+    else
+      clean_cmd_hog "$id"
+    fi
+  done
 }

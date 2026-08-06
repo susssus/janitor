@@ -1,0 +1,26 @@
+# Janitor hog catalog — developer caches only
+# Never: Documents, Downloads, media, games, consumer browser profiles.
+# Fields: id|kind|path_or_cmd|mode|default|emoji|label|blurb
+# kind: path (run_path_task) | cmd (named clean_* in lib/cleaners.sh)
+# mode: remove | contents (path only; ignored for cmd)
+# default: on = enabled on first run; off = adopt via `janitor adopt <id>`
+#
+homebrew|cmd|homebrew|remove|on|🐗|Homebrew|Old brew downloads & bottles. Safe — brew re-fetches when needed.
+npm|cmd|npm|remove|on|🐗|npm cache|npm package tarball cache. Next npm install may re-download.
+pip|cmd|pip|remove|on|🐗|pip cache|pip wheel/HTTP cache. Safe; packages re-download on next install.
+pip3|cmd|pip3|remove|on|🐗|pip3 cache|pip3 wheel/HTTP cache. Safe; packages re-download on next install.
+gradle|path|~/.gradle/caches|remove|on|🐗|Gradle caches|~/.gradle/caches build deps. Next Gradle/Android build re-downloads.
+gradle_daemon|path|~/.gradle/daemon|contents|on|🐗|Gradle daemon|Gradle daemon working dirs. Daemons restart on next build.
+android_sdk_dl|path|~/Library/Android/sdk/.downloadIntermediates|remove|on|🐗|Android SDK downloads|Incomplete Android SDK download leftovers. Safe to clear.
+android_cache|path|~/.android/cache|remove|on|🐗|Android cache|Android tooling cache under ~/.android. Regenerates as needed.
+android_qemu|path|~/Library/Android/sdk/emulator/qemu|contents|on|🐗|Android emulator qemu temps|Emulator qemu temp files. Safe if the emulator is not mid-run.
+xcode_derived|path|~/Library/Developer/Xcode/DerivedData|contents|on|🐗|Xcode DerivedData|Xcode build products. First rebuild after this will be slower.
+playwright|path|~/Library/Caches/ms-playwright|remove|on|🐗|Playwright cache|Playwright browser binaries for tests. Re-downloaded on next test run.
+huggingface|path|~/.cache/huggingface|remove|on|🐗|Hugging Face cache|Downloaded HF models/datasets. Large; only clear if you can re-fetch.
+cocoapods|path|~/Library/Caches/CocoaPods|remove|on|🐗|CocoaPods cache|CocoaPods specs/pods cache. Next pod install re-fetches.
+dart_server|path|~/.dartServer|remove|on|🐗|Dart analysis server|Dart analyzer cache. Regenerates when you open a Dart project.
+pub_cache|cmd|pub_cache|remove|on|🐗|Dart/Flutter pub cache|Dart/Flutter package cache. Next pub get / flutter pub get re-fetches.
+simctl|cmd|simctl|remove|on|🐗|Unavailable simulators|Removes dead/unavailable iOS simulators only — keeps working ones.
+old_logs|cmd|old_logs|remove|on|🐗|Old Library/Logs|macOS Library/Logs older than 14 days. Does not touch app data.
+cursor_caches|path|~/Library/Caches/Cursor|remove|on|🐗|Cursor caches|Cursor editor caches only — not your project files.
+shipit|path|~/Library/Caches/com.anthropic.claudefordesktop.ShipIt|remove|off|🐗|Claude ShipIt cache|Claude desktop auto-update leftovers. Safe. Use --deep or adopt.

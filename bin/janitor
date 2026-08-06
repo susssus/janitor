@@ -12,18 +12,22 @@ source "$JANITOR_HOME/lib/cleaners.sh"
 
 janitor_augment_path
 config_ensure
+janitor_hogs_init
 
 usage() {
   cat <<'EOF'
 janitor — Mac developer housekeeper
 
-Never touches ~/Documents or ~/Downloads.
-Cleans ~/Library caches/logs/dev leftovers and known tool caches.
+Dev caches only. Never touches ~/Documents, ~/Downloads, media, or personal files.
 
 Usage:
   janitor clean [--dry-run] [--deep] [--only id,id,...] [-v]
   janitor desktop [--deep]
   janitor status
+  janitor hogs
+  janitor discover
+  janitor adopt <id>
+  janitor hog add <path> [remove|contents]
   janitor tasks
   janitor disable <task-id>
   janitor enable <task-id>
@@ -33,8 +37,12 @@ Usage:
 Commands:
   clean     Run cleanup (always writes a session log)
   desktop   GUI: assess → check tasks (opt-in) → clean
-  status    Disk, RAM, reclaimable sizes
-  tasks     List cleaners and enabled/disabled state
+  status    Disk, RAM, reclaimable hogs (one 🐗 row each)
+  hogs      List catalog + custom hogs and state
+  discover  Suggest default-off / disabled hogs present on disk
+  adopt     Opt into a catalog hog (saved in ~/.config/janitor/hogs)
+  hog add   Add a custom allowlisted cache path as a hog
+  tasks     List cleaners and enabled/disabled/off state
   disable   Permanently opt out of a task (saved in config)
   enable    Re-enable a previously disabled task
   log       Show latest session log
@@ -42,20 +50,23 @@ Commands:
 
 Options:
   --dry-run      Measure only; delete nothing
-  --deep         Include larger Library/Caches app leftovers
+  --deep         Include default-off deep hogs (e.g. ShipIt)
   --only id,...  Run only these task ids (after assess selection)
   -v, --verbose  Show command output
 
 Config (per user, portable):
   ~/.config/janitor/disabled
+  ~/.config/janitor/hogs
 
 Desktop button:
   ./install.sh --desktop
 
 Examples:
   janitor status
-  janitor tasks
-  janitor disable playwright
+  janitor hogs
+  janitor discover
+  janitor adopt shipit
+  janitor hog add ~/Library/Caches/my-tool
   janitor clean --dry-run
   janitor desktop
   janitor clean --only homebrew,npm,old_logs
@@ -63,24 +74,31 @@ EOF
 }
 
 cmd_status() {
-  echo "🧹 Janitor status"
+  banner "Janitor status" "$K_FACE"
   echo
+  section "Disk"
   df_data
   echo
+  section "RAM"
   ram_report
   echo
-  echo "Reclaimable / notable sizes (Library + tool caches):"
+  section "Hogs (reclaimable)"
   report_sizes
   echo
-  echo "Policy: ~/Documents and ~/Downloads are never touched."
-  echo "Opt-outs: $JANITOR_DISABLED_FILE  (janitor tasks)"
+  echo "${C_DIM}Policy: dev caches only — never Documents, Downloads, or media.${C_RESET}"
+  echo "${C_DIM}Opt-outs: ${JANITOR_DISABLED_FILE}  ·  Hogs: ${JANITOR_HOGS_FILE}${C_RESET}"
   local latest
   latest="$(latest_log_path)"
   if [[ -n "$latest" && -f "$latest" ]]; then
     echo
-    echo "Last run:"
-    grep -E '^(Freed |df avail|Log:|# janitor)' "$latest" 2>/dev/null | sed 's/^/  /' \
-      || echo "  (see $latest)"
+    section "Last run"
+    local real="$latest"
+    if [[ -L "$latest" ]]; then
+      real="$(readlink "$latest" 2>/dev/null || echo "$latest")"
+    fi
+    echo "  ${C_DIM}${real}${C_RESET}"
+    grep -E '^(Freed |df avail|Log:|# janitor|☆|── summary)' "$latest" 2>/dev/null | sed 's/^/  /' \
+      || echo "  (see $real)"
   fi
 }
 
@@ -144,15 +162,17 @@ cmd_clean() {
   df_before="$(free_kb)"
   log_init "clean"
 
-  log_echo "🧹 Developer cleanup"
   if [[ "$DRY_RUN" -eq 1 ]]; then
-    log_echo "(dry-run — nothing will be deleted)"
+    banner "Developer cleanup (dry-run)" "$K_DRY"
+    log_echo "${C_YELLOW}${K_DRY} dry-run — nothing will be deleted${C_RESET}"
+  else
+    banner "Developer cleanup" "$K_SWEEP"
   fi
   if [[ "$DEEP" -eq 1 ]]; then
-    log_echo "(deep profile enabled)"
+    log_echo "${C_CYAN}(deep profile enabled)${C_RESET}"
   fi
   if [[ -n "$JANITOR_ONLY" ]]; then
-    log_echo "(only: $JANITOR_ONLY)"
+    log_echo "${C_CYAN}(only: $JANITOR_ONLY)${C_RESET}"
   fi
   log_echo ""
   {
@@ -165,9 +185,9 @@ cmd_clean() {
 
   echo
   if [[ "$DRY_RUN" -eq 1 ]]; then
-    log_echo "✅ Dry-run complete."
+    log_echo "${C_YELLOW}${K_OK} Dry-run complete.${C_RESET}"
   else
-    log_echo "✅ Cleanup complete."
+    log_echo "${C_GREEN}${K_DONE} Cleanup complete.${C_RESET}"
   fi
   log_finish "$df_before"
   echo
@@ -214,17 +234,41 @@ cmd_enable() {
   task_enable "$1"
 }
 
+cmd_hog() {
+  local sub="${1:-}"
+  shift || true
+  case "$sub" in
+    add)
+      [[ $# -ge 1 ]] || die "usage: janitor hog add <path> [remove|contents]"
+      cmd_hog_add "$@"
+      ;;
+    ""|-h|--help)
+      echo "usage: janitor hog add <path> [remove|contents]"
+      ;;
+    *)
+      die "unknown hog subcommand: $sub (try: janitor hog add <path>)"
+      ;;
+  esac
+}
+
 main() {
   local cmd="${1:-help}"
   shift || true
   case "$cmd" in
-    clean)   cmd_clean "$@" ;;
-    desktop) cmd_desktop "$@" ;;
-    status)  cmd_status "$@" ;;
-    tasks)   cmd_tasks "$@" ;;
-    disable) cmd_disable "$@" ;;
-    enable)  cmd_enable "$@" ;;
-    log)     cmd_log "$@" ;;
+    clean)    cmd_clean "$@" ;;
+    desktop)  cmd_desktop "$@" ;;
+    status)   cmd_status "$@" ;;
+    hogs)     cmd_hogs "$@" ;;
+    discover) cmd_discover "$@" ;;
+    adopt)
+      [[ $# -ge 1 ]] || die "usage: janitor adopt <id>"
+      cmd_adopt "$1"
+      ;;
+    hog)      cmd_hog "$@" ;;
+    tasks)    cmd_tasks "$@" ;;
+    disable)  cmd_disable "$@" ;;
+    enable)   cmd_enable "$@" ;;
+    log)      cmd_log "$@" ;;
     help|-h|--help) usage ;;
     *) die "unknown command: $cmd (try: janitor help)" ;;
   esac

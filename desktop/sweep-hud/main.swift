@@ -84,7 +84,7 @@ final class Hud: NSObject, NSApplicationDelegate {
 
     var timer: Timer?
     var cmdTimer: Timer?
-    let frames = ["🧹", "🧹 💨", "💨 🧹", "✨ 🧹", "🧹✨"]
+    let frames = ["(*^▽^*)", "(｀・ω・´)", "٩(ˊᗜˋ*)و", "(ノ°ο°)ノ", "(＾▽＾)"]
     var idx = 0
     var animate = false
 
@@ -116,7 +116,7 @@ final class Hud: NSObject, NSApplicationDelegate {
             backing: .buffered,
             defer: false
         )
-        window.title = "🧹 Janitor"
+        window.title = "Janitor"
         window.isReleasedWhenClosed = false
         window.level = .floating
         window.backgroundColor = darkBg
@@ -204,7 +204,7 @@ final class Hud: NSObject, NSApplicationDelegate {
     }
 
     func buildChrome() {
-        broomLabel = label("🧹", frame: NSRect(x: 0, y: winH - 100, width: winW, height: 70), size: 48)
+        broomLabel = label("(*^▽^*)", frame: NSRect(x: 0, y: winH - 100, width: winW, height: 70), size: 28)
         titleLabel = label("Janitor", frame: NSRect(x: 20, y: winH - 130, width: winW - 40, height: 28), size: 22)
         subtitleLabel = label(
             "", frame: NSRect(x: 20, y: winH - 154, width: winW - 40, height: 20), size: 13, bold: false
@@ -355,7 +355,7 @@ final class Hud: NSObject, NSApplicationDelegate {
         chooseBox.isHidden = true
         doneBox.isHidden = true
         animate = false
-        broomLabel.stringValue = "🧹"
+        broomLabel.stringValue = "(*^▽^*)"
 
         switch name {
         case "welcome":
@@ -385,7 +385,7 @@ final class Hud: NSObject, NSApplicationDelegate {
             titleLabel.stringValue = "Hooray! Cleanup complete"
             subtitleLabel.stringValue = "Your disk is a little tidier"
             animate = false
-            broomLabel.stringValue = "✨🧹"
+            broomLabel.stringValue = "☆(≧▽≦)☆"
         default:
             hudLog("unknown phase \(name)")
         }

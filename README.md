@@ -1,6 +1,22 @@
 # Janitor
 
-Mac development housekeeper. Reclaims disk from **`~/Library`** caches/logs/dev leftovers and known tool caches (`~/.gradle`, `~/.npm`, `~/.pub-cache`, …).
+Mac **developer** housekeeper. Reclaims disk from known **dev tool** caches (`~/.gradle`, `~/.npm`, `~/.pub-cache`, Xcode DerivedData, …) and regenerable leftovers under `~/Library`.
+
+**Never** touches `~/Documents`, `~/Downloads`, media apps, games, or other personal files. Other tools own those.
+
+## Hogs
+
+Each reclaimable target is a **hog** (🐗). List them one row per hog:
+
+```bash
+janitor hogs          # catalog + custom, with state
+janitor status        # disk / RAM + hog sizes
+janitor discover      # suggest default-off / disabled hogs on disk
+janitor adopt shipit  # opt into a catalog hog
+janitor hog add ~/Library/Caches/my-tool
+```
+
+Catalog lives in the repo (`config/hogs.catalog`). Your enabled extras and custom paths live in `~/.config/janitor/hogs` (not committed).
 
 ## Desktop button (sweeper box)
 
@@ -23,7 +39,7 @@ Same flow from the terminal: `janitor desktop`.
 ## Opt out of tasks
 
 ```bash
-janitor tasks                 # list ids + enabled/disabled
+janitor tasks                 # list ids + enabled/disabled/off
 janitor disable playwright    # never clean this (until re-enabled)
 janitor enable playwright
 janitor clean --only homebrew,npm,old_logs
@@ -33,7 +49,7 @@ Config is per-user and portable: `~/.config/janitor/disabled` (see `config/disab
 
 ## Sacrosanct
 
-**Never touches** `~/Documents` or `~/Downloads` (hard path guard on every delete). No home-wide sweeps.
+**Never touches** `~/Documents` or `~/Downloads` (hard path guard on every delete). Path hogs must also sit under an allowlisted cache root (`~/Library/Caches`, `~/.gradle`, …). No home-wide sweeps. No media.
 
 ## Quick start
 
@@ -46,19 +62,21 @@ Config is per-user and portable: `~/.config/janitor/disabled` (see `config/disab
 Ensure `~/bin` is on your `PATH`, then:
 
 ```bash
-janitor status              # disk + reclaimable sizes (sorted)
-janitor desktop             # GUI: sweeper box (welcome → assess → choose → sweep → done)
+janitor status              # disk + hog sizes (sorted)
+janitor hogs                # 🐗 one row per hog
+janitor discover            # suggestions to adopt
+janitor desktop             # GUI: sweeper box
 janitor tasks               # enable/disable list
 janitor clean --dry-run     # preview + write log (no deletes)
 janitor clean               # clean + always log what/how much
-janitor clean --deep        # + larger Library/Caches app leftovers
+janitor clean --deep        # + default-off deep hogs (e.g. ShipIt)
 janitor log                 # show latest session log
 janitor log --path          # print path only
 ```
 
 ## Logging (always on)
 
-Every `clean` (including dry-run and launchd) writes:
+Every `clean` (including dry-run and launchd) writes under `~/Library/Logs/janitor/` (local only — not shipped with the repo):
 
 | File | Purpose |
 |------|---------|
@@ -69,7 +87,7 @@ Every `clean` (including dry-run and launchd) writes:
 
 Each task records path, before/after KB, freed KB, and status. The summary uses measured `du` totals; `df` delta is informational only (APFS is noisy).
 
-## Default cleaners
+## Default cleaners (catalog)
 
 | Task | Target |
 |------|--------|
@@ -79,19 +97,18 @@ Each task records path, before/after KB, freed KB, and status. The summary uses 
 | Gradle | `~/.gradle/caches` + daemon dir contents |
 | Android | SDK `.downloadIntermediates`, `~/.android/cache`, emulator `qemu/*` temps |
 | Xcode | `DerivedData` contents |
-| Playwright / Google / HF | Named Library / `.cache` dirs |
-| Stremio | stremio-cache (skipped if app/server running) |
+| Playwright / HF | Named Library / `.cache` dirs |
 | CocoaPods | `~/Library/Caches/CocoaPods` |
-| Dart / Flutter | `~/.dartServer`; `dart`/`flutter pub cache clean` (not `pub cache repair`) |
+| Dart / Flutter | `~/.dartServer`; `dart`/`flutter pub cache clean` |
 | Simulators | `xcrun simctl delete unavailable` |
 | Old logs | `~/Library/Logs` files older than 14 days (keeps `janitor/`) |
 | Cursor | `~/Library/Caches/Cursor` only (not Application Support) |
 
-`status` and each `clean` also print a **RAM snapshot** (available-ish, compressed, wired, memory free %, top RSS) — from the old `sanemaker.sh` playbook. Disk view prefers `/System/Volumes/Data`.
+`status` and each `clean` also print a **RAM snapshot** (available-ish, compressed, wired, memory free %, top RSS). Disk view prefers `/System/Volumes/Data`.
 
 ## `--deep`
 
-Also clears named `~/Library/Caches` leftovers: Claude ShipIt, Mozilla, Firefox, Canva updater, Steam, Stremio5.
+Also clears default-off deep hogs (Claude ShipIt updater leftovers). Adopt with `janitor adopt shipit` to enable without `--deep`.
 
 Still never touches Documents/Downloads, Docker.raw, full Cursor Application Support, or the whole Android SDK tree (those appear in `status` as report-only).
 
@@ -102,11 +119,12 @@ bin/janitor
 bin/janitor-desktop   # sweeper box orchestrator (welcome → assess → choose → sweep → done)
 bin/janitor-sweep-hud # launches multi-phase Swift sweeper box
 bin/janitor-sweep-hud.appbin  # compiled Swift UI (built by desktop/build-app.sh)
-bin/janitor-choose-tasks  # legacy standalone checkbox picker (unused in happy path)
 desktop/sweep-hud/    # Swift source for the sweeper box
 lib/common.sh
-lib/config.sh         # ~/.config/janitor + portable PATH
+lib/config.sh         # ~/.config/janitor + hog catalog loader
 lib/cleaners.sh
+config/hogs.catalog   # known DEV hogs (repo)
+config/hogs.example   # user hogs file template
 config/disabled.example
 install.sh
 launchd/…
@@ -118,5 +136,5 @@ desktop/              # app builder + icon
 `./install.sh --schedule` loads a LaunchAgent with a PATH that includes Homebrew, nvm node (if present), and Flutter. Working directory is `$HOME`. Script logging does not depend on stdout redirects.
 
 ```bash
-launchctl unload ~/Library/LaunchAgents/com.susssus.janitor.plist
+launchctl list | grep janitor
 ```

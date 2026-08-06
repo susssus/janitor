@@ -134,7 +134,7 @@ function makeLabel(text, frame, size) {
   return t;
 }
 
-var broom = makeLabel('🧹', $.NSMakeRect(0, 90, w, 110), 84);
+var broom = makeLabel('(*^▽^*)', $.NSMakeRect(0, 90, w, 110), 28);
 var sub = makeLabel(cfg.phase + '…', $.NSMakeRect(12, 42, w - 24, 32), 22);
 var hint = makeLabel('Janitor', $.NSMakeRect(12, 14, w - 24, 24), 14);
 win.contentView.addSubview(broom);
@@ -151,7 +151,7 @@ if (cfg.ready && cfg.ready.length > 0) {
   );
 }
 
-var frames = ['🧹', '🧹 💨', '💨 🧹', '✨ 🧹', '🧹✨'];
+var frames = ['(*^▽^*)', '(｀・ω・´)', '٩(ˊᗜˋ*)و', '(ノ°ο°)ノ', '(＾▽＾)'];
 var i = 0;
 while (true) {
   broom.setStringValue(frames[i]);

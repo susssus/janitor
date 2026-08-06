@@ -13,6 +13,7 @@ source "$JANITOR_HOME/lib/config.sh"
 
 janitor_augment_path
 config_ensure
+janitor_hogs_init
 
 DESKTOP_DEBUG_LOG="${JANITOR_LOG_DIR}/desktop-debug.log"
 HUD_PID=""
@@ -40,7 +41,7 @@ notify() {
 alert() {
   local message="$1"
   osascript <<EOF
-display dialog "$(osascript_escape "$message")" with title "🧹 Janitor" buttons {"OK"} default button "OK" with icon note
+display dialog "$(osascript_escape "$message")" with title "Janitor" buttons {"OK"} default button "OK" with icon note
 EOF
 }
 
@@ -181,13 +182,14 @@ stream_to_hud() {
 
 log_task_summary() {
   local logfile="$1"
-  local max="${2:-15}"
+  local max="${2:-20}"
   if [[ ! -f "$logfile" ]]; then
     echo "(no log yet)"
     return 0
   fi
   local lines
-  lines="$(grep -E '^• ' "$logfile" 2>/dev/null | tail -n "$max")"
+  # Task rows (kaomoji + status) and the full-path lines under them
+  lines="$(grep -E '\[(ok|dry-run|skip|refuse|done)\]|^    /' "$logfile" 2>/dev/null | tail -n "$max")"
   if [[ -z "$lines" ]]; then
     echo "(no task lines)"
   else
@@ -334,7 +336,7 @@ hud_cmd "done_line Full log:"
 hud_cmd "done_line ${clean_log:-none}"
 hud_cmd "done_end"
 
-notify "🧹 Janitor" "Hooray! ${result_line}"
+notify "Janitor" "Hooray! ${result_line}"
 
 hud_next_event
 dbg "done event=$HUD_EVENT"

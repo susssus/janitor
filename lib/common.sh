@@ -5,14 +5,99 @@ JANITOR_LOG_DIR="${JANITOR_LOG_DIR:-$HOME/Library/Logs/janitor}"
 JANITOR_HISTORY="$JANITOR_LOG_DIR/history.tsv"
 JANITOR_ASSESS_TSV="$JANITOR_LOG_DIR/last-assess.tsv"
 
-# Sacrosanct — never touch
+# Sacrosanct — never touch (personal files)
 SACROSANCT_DIRS=(
   "$HOME/Documents"
   "$HOME/Downloads"
 )
+
+# Positive allowlist — only these cache-like roots may be cleaned
+# (dev tool caches; never media / personal documents)
+janitor_allowlist_roots() {
+  local roots=(
+    "$HOME/Library/Caches"
+    "$HOME/Library/Logs"
+    "$HOME/Library/Developer"
+    "$HOME/Library/Android"
+    "$HOME/.cache"
+    "$HOME/.npm"
+    "$HOME/.gradle"
+    "$HOME/.pub-cache"
+    "$HOME/.dartServer"
+    "$HOME/.android"
+  )
+  local brew_cache
+  brew_cache="$(brew --cache 2>/dev/null || true)"
+  if [[ -n "${brew_cache:-}" ]]; then
+    roots+=("$brew_cache")
+  fi
+  printf '%s\n' "${roots[@]}"
+}
+
 die() {
   echo "janitor: $*" >&2
   exit 1
+}
+
+# --- Terminal candies (sanemaker-style): colors + kaomoji, no emoji ---
+# Respect NO_COLOR / non-TTY. Logs stay plain (strip codes).
+
+janitor_color_init() {
+  if [[ -n "${NO_COLOR:-}" ]] || [[ ! -t 1 ]]; then
+    C_RESET=""; C_BOLD=""; C_DIM=""
+    C_RED=""; C_GREEN=""; C_YELLOW=""; C_BLUE=""; C_MAGENTA=""; C_CYAN=""
+    return 0
+  fi
+  C_RESET=$'\033[0m'
+  C_BOLD=$'\033[1m'
+  C_DIM=$'\033[2m'
+  C_RED=$'\033[31m'
+  C_GREEN=$'\033[32m'
+  C_YELLOW=$'\033[33m'
+  C_BLUE=$'\033[34m'
+  C_MAGENTA=$'\033[35m'
+  C_CYAN=$'\033[36m'
+}
+janitor_color_init
+
+# Kaomoji (ASCII-friendly Japanese emoticons)
+K_FACE='(*^▽^*)'
+K_SWEEP='(｀・ω・´)'
+K_OK='(＾▽＾)'
+K_DRY='(・・?)'
+K_SKIP='(・_・;)'
+K_NOPE='(>_<)'
+K_DONE='☆*:.｡.o(≧▽≦)o.｡.:*☆'
+K_WARN='(；￣Д￣)'
+
+strip_ansi() {
+  # shellcheck disable=SC2001
+  printf '%s' "$*" | sed $'s/\033\\[[0-9;]*[mK]//g'
+}
+
+c_echo() {
+  printf '%s\n' "$*"
+}
+
+c_or_log() {
+  if [[ -n "${LOG_FILE:-}" ]]; then
+    log_echo "$*"
+  else
+    c_echo "$*"
+  fi
+}
+
+banner() {
+  local title="$1"
+  local face="${2:-$K_FACE}"
+  c_or_log "${C_CYAN}${C_BOLD}────────────────────────────────────────${C_RESET}"
+  c_or_log "${C_CYAN}${C_BOLD}  ${face}  ${title}${C_RESET}"
+  c_or_log "${C_CYAN}${C_BOLD}────────────────────────────────────────${C_RESET}"
+}
+
+section() {
+  local title="$1"
+  c_or_log "${C_BLUE}${C_BOLD}── ${title} ──${C_RESET}"
 }
 
 # Free space on home volume, in KB
@@ -92,13 +177,31 @@ is_sacrosanct() {
   return 1
 }
 
-# Abort (or return non-zero in check mode) if path is forbidden
+# Return 0 if path is under an allowlisted cache root
+path_is_allowlisted() {
+  local resolved="$1" root
+  resolved="$(abs_path "$resolved")"
+  while IFS= read -r root; do
+    [[ -z "$root" ]] && continue
+    root="$(abs_path "$root")"
+    if [[ "$resolved" == "$root" || "$resolved" == "$root"/* ]]; then
+      return 0
+    fi
+  done < <(janitor_allowlist_roots)
+  return 1
+}
+
+# Abort (or return non-zero) if path is forbidden or outside allowlist
 assert_safe_path() {
   local path="$1"
   local resolved
   resolved="$(abs_path "$path")"
   if is_sacrosanct "$resolved"; then
     echo "janitor: REFUSED unsafe path (Documents/Downloads are sacrosanct): $resolved" >&2
+    return 1
+  fi
+  if ! path_is_allowlisted "$resolved"; then
+    echo "janitor: REFUSED path outside allowlisted cache roots: $resolved" >&2
     return 1
   fi
   return 0
@@ -131,14 +234,38 @@ log_init() {
 
 log_line() {
   local msg="$*"
+  [[ -n "${LOG_FILE:-}" ]] || return 0
   echo "$msg" >>"$LOG_FILE"
 }
 
 log_echo() {
-  # Console + log
+  # Colored console + plain log
   local msg="$*"
-  echo "$msg"
-  log_line "$msg"
+  local plain
+  plain="$(strip_ansi "$msg")"
+  printf '%s\n' "$msg"
+  log_line "$plain"
+}
+
+# Pretty task line + always-visible absolute path (second line).
+# kind: ok | dry | skip | refuse | done
+log_task() {
+  local kind="$1" label="$2" detail="$3" path="${4:--}"
+  local face mark color path_show
+  case "$kind" in
+    ok)     face="$K_OK";   mark="ok";      color="$C_GREEN" ;;
+    dry)    face="$K_DRY";  mark="dry-run"; color="$C_YELLOW" ;;
+    skip)   face="$K_SKIP"; mark="skip";    color="$C_DIM" ;;
+    refuse) face="$K_NOPE"; mark="refuse";  color="$C_RED" ;;
+    done)   face="$K_OK";   mark="done";    color="$C_GREEN" ;;
+    *)      face="$K_SWEEP"; mark="$kind";  color="$C_CYAN" ;;
+  esac
+  path_show="$path"
+  if [[ "$path" != "-" && -n "$path" ]]; then
+    path_show="$(abs_path "$path")"
+  fi
+  log_echo "${color}${face}${C_RESET} ${C_BOLD}${label}${C_RESET}  [${mark}]  ${detail}"
+  log_echo "    ${C_DIM}${path_show}${C_RESET}"
 }
 
 history_append() {
@@ -185,13 +312,13 @@ run_path_task() {
   fi
 
   if ! assert_safe_path "$path"; then
-    log_echo "• $label  (refused — unsafe path)"
+    log_task refuse "$label" "unsafe path" "$path"
     history_append "$(date -Iseconds 2>/dev/null || date)" "$id" "$path" 0 0 0 "refused"
     return 0
   fi
 
   if [[ ! -e "$path" ]]; then
-    log_echo "• $label  (skipped — missing)"
+    log_task skip "$label" "missing" "$path"
     history_append "$(date -Iseconds 2>/dev/null || date)" "$id" "$path" 0 0 0 "missing"
     return 0
   fi
@@ -203,8 +330,8 @@ run_path_task() {
     freed="$before"
     after=0
     status="dry-run"
-    log_echo "• $label  [dry-run]  would free $(fmt_kb "$freed")"
-    log_line "  path=$path before_kb=$before after_kb=$after freed_kb=$freed status=$status"
+    log_task dry "$label" "would free $(fmt_kb "$freed")" "$path"
+    log_line "  path=$(abs_path "$path") before_kb=$before after_kb=$after freed_kb=$freed status=$status"
     history_append "$ts" "$id" "$path" "$before" "$after" "$freed" "$status"
     assess_append "$id" "$label" "$freed" "$status"
     TOTAL_FREED_KB=$((TOTAL_FREED_KB + freed))
@@ -222,8 +349,8 @@ run_path_task() {
   freed=$(( before - after ))
   if [[ "$freed" -lt 0 ]]; then freed=0; fi
   status="ok"
-  log_echo "• $label  freed $(fmt_kb "$freed")"
-  log_line "  path=$path before_kb=$before after_kb=$after freed_kb=$freed status=$status"
+  log_task ok "$label" "freed $(fmt_kb "$freed")" "$path"
+  log_line "  path=$(abs_path "$path") before_kb=$before after_kb=$after freed_kb=$freed status=$status"
   history_append "$ts" "$id" "$path" "$before" "$after" "$freed" "$status"
   assess_append "$id" "$label" "$freed" "$status"
   TOTAL_FREED_KB=$((TOTAL_FREED_KB + freed))
@@ -245,7 +372,7 @@ run_cmd_task() {
 
   if [[ -n "$measure_path" ]]; then
     if ! assert_safe_path "$measure_path"; then
-      log_echo "• $label  (refused — unsafe measure path)"
+      log_task refuse "$label" "unsafe measure path" "$measure_path"
       history_append "$(date -Iseconds 2>/dev/null || date)" "$id" "$measure_path" 0 0 0 "refused"
       return 0
     fi
@@ -258,9 +385,9 @@ run_cmd_task() {
     freed="$before"
     status="dry-run"
     if [[ -n "$measure_path" ]]; then
-      log_echo "• $label  [dry-run]  would free ~$(fmt_kb "$freed")  ($*)"
+      log_task dry "$label" "would free ~$(fmt_kb "$freed")  ($*)" "$measure_path"
     else
-      log_echo "• $label  [dry-run]  $*"
+      log_task dry "$label" "$*" "-"
     fi
     log_line "  path=${measure_path:--} before_kb=$before after_kb=0 freed_kb=$freed status=$status cmd=$*"
     history_append "$ts" "$id" "${measure_path:--}" "$before" 0 "$freed" "$status"
@@ -283,9 +410,9 @@ run_cmd_task() {
   fi
   status="ok"
   if [[ -n "$measure_path" ]]; then
-    log_echo "• $label  freed $(fmt_kb "$freed")"
+    log_task ok "$label" "freed $(fmt_kb "$freed")" "$measure_path"
   else
-    log_echo "• $label  done"
+    log_task done "$label" "done" "-"
   fi
   log_line "  path=${measure_path:--} before_kb=$before after_kb=$after freed_kb=$freed status=$status cmd=$*"
   history_append "$ts" "$id" "${measure_path:--}" "$before" "$after" "$freed" "$status"
@@ -296,7 +423,7 @@ run_cmd_task() {
 
 log_skip() {
   local id="$1" label="$2" reason="$3" path="${4:--}"
-  log_echo "• $label  (skipped — $reason)"
+  log_task skip "$label" "$reason" "$path"
   log_line "  path=$path status=skipped reason=$reason"
   history_append "$(date -Iseconds 2>/dev/null || date)" "$id" "$path" 0 0 0 "skipped:$reason"
 }
@@ -307,13 +434,11 @@ log_finish() {
   local df_delta=$(( (df_after - df_before) ))
   if [[ "$df_delta" -lt 0 ]]; then df_delta=0; fi
 
-  {
-    echo "#"
-    echo "# summary"
-    echo "Freed (measured): $(fmt_kb "$TOTAL_FREED_KB") across $TOTAL_TASKS tasks"
-    echo "df avail delta: $(fmt_kb "$df_delta") (informational)"
-    echo "Log: $LOG_FILE"
-  } | tee -a "$LOG_FILE"
+  log_echo ""
+  log_echo "${C_MAGENTA}${C_BOLD}── summary ──${C_RESET}"
+  log_echo "${C_MAGENTA}${C_BOLD}${K_DONE}${C_RESET} ${C_GREEN}${C_BOLD}Freed (measured): $(fmt_kb "$TOTAL_FREED_KB")${C_RESET} across $TOTAL_TASKS tasks"
+  log_echo "${C_DIM}df avail delta: $(fmt_kb "$df_delta") (informational)${C_RESET}"
+  log_echo "${C_DIM}Log: ${LOG_FILE}${C_RESET}"
 }
 
 latest_log_path() {

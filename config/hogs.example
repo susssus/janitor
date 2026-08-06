@@ -1,0 +1,13 @@
+# Janitor — adopted / custom hogs
+# Lives at: ~/.config/janitor/hogs
+# Created by: janitor adopt <id>  or  janitor hog add <path>
+#
+# Catalog adopt (one id per line):
+# shipit
+#
+# Custom path hog:
+# custom:<id>|<path>|<mode>|<label>
+# custom:my_tool|~/Library/Caches/my-tool|contents|My tool cache
+#
+# Paths must be under an allowlisted cache root (see janitor hog add).
+# Never Documents, Downloads, media, or personal files.

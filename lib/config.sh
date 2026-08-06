@@ -1,90 +1,198 @@
 #!/bin/bash
-# User config + portable PATH — no machine-specific hardcoding required
+# User config + hog catalog — portable PATH, no machine-specific hardcoding
 
 # XDG-style config (portable across users)
 JANITOR_CONFIG_DIR="${JANITOR_CONFIG_DIR:-$HOME/.config/janitor}"
 JANITOR_DISABLED_FILE="$JANITOR_CONFIG_DIR/disabled"
+JANITOR_HOGS_FILE="$JANITOR_CONFIG_DIR/hogs"
 JANITOR_ASSESS_TSV="${JANITOR_LOG_DIR:-$HOME/Library/Logs/janitor}/last-assess.tsv"
+JANITOR_CATALOG_FILE="${JANITOR_CATALOG_FILE:-$JANITOR_HOME/config/hogs.catalog}"
 
-# Known task ids (for `janitor tasks` / enable / disable)
-JANITOR_TASK_IDS=(
-  homebrew npm pip pip3 gradle gradle_daemon
-  android_sdk_dl android_cache android_qemu
-  xcode_derived playwright google huggingface
-  stremio cocoapods dart_server pub_cache simctl
-  old_logs cursor_caches
-  shipit mozilla firefox canva steam stremio5
-)
+HOG_EMOJI="🐗"
 
-JANITOR_TASK_LABELS=(
-  "Homebrew"
-  "npm cache"
-  "pip cache"
-  "pip3 cache"
-  "Gradle caches"
-  "Gradle daemon"
-  "Android SDK downloads"
-  "Android cache"
-  "Android emulator qemu temps"
-  "Xcode DerivedData"
-  "Playwright cache"
-  "Google / Chrome cache"
-  "Hugging Face cache"
-  "Stremio cache"
-  "CocoaPods cache"
-  "Dart analysis server"
-  "Dart/Flutter pub cache"
-  "Unavailable simulators"
-  "Old Library/Logs"
-  "Cursor caches"
-  "Claude ShipIt cache"
-  "Mozilla cache"
-  "Firefox cache"
-  "Canva updater cache"
-  "Steam cache"
-  "Stremio5 cache"
-)
+# Runtime tables filled by catalog_load (parallel arrays)
+JANITOR_TASK_IDS=()
+JANITOR_TASK_LABELS=()
+JANITOR_TASK_BLURBS=()
+JANITOR_TASK_KINDS=()      # path | cmd
+JANITOR_TASK_PATHS=()      # expanded path or cmd key
+JANITOR_TASK_MODES=()      # remove | contents
+JANITOR_TASK_DEFAULTS=()   # on | off
+JANITOR_TASK_EMOJIS=()
+JANITOR_TASK_CUSTOM=()     # 0 | 1
 
-# Brief “what / when to keep” notes for the desktop checkbox UI (same order as IDs).
-JANITOR_TASK_BLURBS=(
-  "Old brew downloads & bottles. Safe — brew re-fetches when needed."
-  "npm package tarball cache. Next npm install may re-download."
-  "pip wheel/HTTP cache. Safe; packages re-download on next install."
-  "pip3 wheel/HTTP cache. Safe; packages re-download on next install."
-  "~/.gradle/caches build deps. Next Gradle/Android build re-downloads."
-  "Gradle daemon working dirs. Daemons restart on next build."
-  "Incomplete Android SDK download leftovers. Safe to clear."
-  "Android tooling cache under ~/.android. Regenerates as needed."
-  "Emulator qemu temp files. Safe if the emulator is not mid-run."
-  "Xcode build products. First rebuild after this will be slower."
-  "Playwright browser binaries for tests. Re-downloaded on next test run."
-  "Google/Chrome app caches (not your bookmarks or passwords)."
-  "Downloaded HF models/datasets. Large; only clear if you can re-fetch."
-  "Stremio streaming cache. May re-buffer after clearing."
-  "CocoaPods specs/pods cache. Next pod install re-fetches."
-  "Dart analyzer cache. Regenerates when you open a Dart project."
-  "Dart/Flutter package cache. Next pub get / flutter pub get re-fetches."
-  "Removes dead/unavailable iOS simulators only — keeps working ones."
-  "macOS Library/Logs older than 14 days. Does not touch app data."
-  "Cursor editor caches only — not your project files."
-  "Claude desktop auto-update leftovers. Safe."
-  "Mozilla app cache. Safe; pages may load slightly slower once."
-  "Firefox cache. Safe; pages may load slightly slower once."
-  "Canva updater leftovers. Safe."
-  "Steam download/cache leftovers. Won’t remove installed games."
-  "Stremio5 app cache. May re-buffer after clearing."
-)
+# Expand ~ in a path string
+hog_expand_path() {
+  local path="$1"
+  if [[ "$path" == "~"* ]]; then
+    path="${path/#\~/$HOME}"
+  fi
+  echo "$path"
+}
 
-# Lookup blurb by task id (empty string if unknown).
-task_blurb() {
+# Warn and skip bad catalog lines without aborting (set -e safe)
+catalog_warn() {
+  echo "janitor: catalog skip: $*" >&2
+}
+
+# Load repo catalog into runtime arrays. Safe if file missing/partial.
+catalog_load() {
+  JANITOR_TASK_IDS=()
+  JANITOR_TASK_LABELS=()
+  JANITOR_TASK_BLURBS=()
+  JANITOR_TASK_KINDS=()
+  JANITOR_TASK_PATHS=()
+  JANITOR_TASK_MODES=()
+  JANITOR_TASK_DEFAULTS=()
+  JANITOR_TASK_EMOJIS=()
+  JANITOR_TASK_CUSTOM=()
+
+  local file="${JANITOR_CATALOG_FILE:-}"
+  if [[ -z "$file" || ! -f "$file" ]]; then
+    catalog_warn "missing catalog at ${file:-unset}"
+    return 0
+  fi
+
+  local line id kind path_or_cmd mode default emoji label blurb
+  while IFS= read -r line || [[ -n "$line" ]]; do
+    [[ -z "$line" || "$line" =~ ^[[:space:]]*# ]] && continue
+    IFS='|' read -r id kind path_or_cmd mode default emoji label blurb <<<"$line" || true
+    if [[ -z "${id:-}" || -z "${kind:-}" || -z "${label:-}" ]]; then
+      catalog_warn "bad line: $line"
+      continue
+    fi
+    case "$kind" in path|cmd) ;; *) catalog_warn "bad kind '$kind' for $id"; continue ;; esac
+    case "${default:-on}" in on|off) ;; *) default="on" ;; esac
+    case "${mode:-remove}" in remove|contents) ;; *) mode="remove" ;; esac
+    emoji="${emoji:-$HOG_EMOJI}"
+
+    JANITOR_TASK_IDS+=("$id")
+    JANITOR_TASK_KINDS+=("$kind")
+    if [[ "$kind" == "path" ]]; then
+      JANITOR_TASK_PATHS+=("$(hog_expand_path "$path_or_cmd")")
+    else
+      JANITOR_TASK_PATHS+=("$path_or_cmd")
+    fi
+    JANITOR_TASK_MODES+=("$mode")
+    JANITOR_TASK_DEFAULTS+=("$default")
+    JANITOR_TASK_EMOJIS+=("$emoji")
+    JANITOR_TASK_LABELS+=("$label")
+    JANITOR_TASK_BLURBS+=("${blurb:-}")
+    JANITOR_TASK_CUSTOM+=("0")
+  done <"$file"
+}
+
+# Merge user ~/.config/janitor/hogs (adopted ids + custom path lines)
+user_hogs_load() {
+  local file="$JANITOR_HOGS_FILE"
+  [[ -f "$file" ]] || return 0
+
+  local line id path mode label rest
+  while IFS= read -r line || [[ -n "$line" ]]; do
+    [[ -z "$line" || "$line" =~ ^[[:space:]]*# ]] && continue
+    line="${line#"${line%%[![:space:]]*}"}"
+    line="${line%"${line##*[![:space:]]}"}"
+
+    if [[ "$line" == custom:* ]]; then
+      rest="${line#custom:}"
+      IFS='|' read -r id path mode label <<<"$rest" || true
+      if [[ -z "${id:-}" || -z "${path:-}" ]]; then
+        catalog_warn "bad custom hog: $line"
+        continue
+      fi
+      mode="${mode:-contents}"
+      label="${label:-$id}"
+      path="$(hog_expand_path "$path")"
+      # Skip duplicate ids
+      if task_index "$id" >/dev/null 2>&1; then
+        catalog_warn "custom id already in catalog: $id"
+        continue
+      fi
+      JANITOR_TASK_IDS+=("$id")
+      JANITOR_TASK_KINDS+=("path")
+      JANITOR_TASK_PATHS+=("$path")
+      JANITOR_TASK_MODES+=("$mode")
+      JANITOR_TASK_DEFAULTS+=("on")
+      JANITOR_TASK_EMOJIS+=("$HOG_EMOJI")
+      JANITOR_TASK_LABELS+=("$label")
+      JANITOR_TASK_BLURBS+=("Custom path hog.")
+      JANITOR_TASK_CUSTOM+=("1")
+      continue
+    fi
+
+    # Adopted catalog id — mark default on by flipping DEFAULTS for that id
+    id="$line"
+    local idx
+    idx="$(task_index "$id" 2>/dev/null || true)"
+    if [[ -n "$idx" ]]; then
+      JANITOR_TASK_DEFAULTS[$idx]="on"
+    else
+      catalog_warn "adopt unknown id (not in catalog): $id"
+    fi
+  done <"$file"
+}
+
+# Print index of task id, or return 1
+task_index() {
   local want="$1" i
   for i in "${!JANITOR_TASK_IDS[@]}"; do
     if [[ "${JANITOR_TASK_IDS[$i]}" == "$want" ]]; then
-      echo "${JANITOR_TASK_BLURBS[$i]}"
+      echo "$i"
       return 0
     fi
   done
+  return 1
+}
+
+task_blurb() {
+  local want="$1" i
+  i="$(task_index "$want" 2>/dev/null || true)"
+  if [[ -n "$i" ]]; then
+    echo "${JANITOR_TASK_BLURBS[$i]}"
+    return 0
+  fi
   echo ""
+}
+
+task_label() {
+  local want="$1" i
+  i="$(task_index "$want" 2>/dev/null || true)"
+  if [[ -n "$i" ]]; then
+    echo "${JANITOR_TASK_LABELS[$i]}"
+    return 0
+  fi
+  echo "$want"
+}
+
+# 0 if this hog is in the enabled set (default on or adopted/custom), ignoring disable/only
+hog_is_in_enabled_set() {
+  local id="$1" i
+  i="$(task_index "$id" 2>/dev/null || true)"
+  [[ -n "$i" ]] || return 1
+  [[ "${JANITOR_TASK_DEFAULTS[$i]}" == "on" ]] || return 1
+  return 0
+}
+
+# Measure path for a catalog/cmd hog (best-effort for status rows)
+hog_measure_path() {
+  local id="$1" i kind path
+  i="$(task_index "$id" 2>/dev/null || true)"
+  [[ -n "$i" ]] || { echo ""; return 1; }
+  kind="${JANITOR_TASK_KINDS[$i]}"
+  path="${JANITOR_TASK_PATHS[$i]}"
+  if [[ "$kind" == "path" ]]; then
+    echo "$path"
+    return 0
+  fi
+  case "$id" in
+    homebrew) brew --cache 2>/dev/null || echo "" ;;
+    npm) echo "$HOME/.npm" ;;
+    pip|pip3) echo "$HOME/Library/Caches/pip" ;;
+    pub_cache) echo "$HOME/.pub-cache" ;;
+    simctl) echo "$HOME/Library/Developer/CoreSimulator" ;;
+    old_logs) echo "$HOME/Library/Logs" ;;
+    *) echo "" ;;
+  esac
 }
 
 config_ensure() {
@@ -133,9 +241,31 @@ task_enable() {
   echo "enabled: $id"
 }
 
-# should_run id — respects config disabled + JANITOR_ONLY=id1,id2
+# True if id is listed in user hogs file (adopt or custom)
+user_hog_listed() {
+  local id="$1"
+  [[ -f "$JANITOR_HOGS_FILE" ]] || return 1
+  grep -E "^[[:space:]]*${id}[[:space:]]*$" "$JANITOR_HOGS_FILE" >/dev/null 2>&1 \
+    || grep -E "^[[:space:]]*custom:${id}\\|" "$JANITOR_HOGS_FILE" >/dev/null 2>&1
+}
+
+# True if --deep unlocks this default-off catalog hog for this run
+hog_unlocked_by_deep() {
+  local id="$1" i
+  [[ "${DEEP:-0}" -eq 1 ]] || return 1
+  i="$(task_index "$id" 2>/dev/null || true)"
+  [[ -n "$i" ]] || return 1
+  [[ "${JANITOR_TASK_CUSTOM[$i]}" == "0" ]] || return 1
+  [[ "${JANITOR_TASK_DEFAULTS[$i]}" == "off" ]] || return 1
+  return 0
+}
+
+# should_run id — enabled set (or deep-unlocked) + not disabled + JANITOR_ONLY
 should_run() {
   local id="$1"
+  if ! hog_is_in_enabled_set "$id" && ! hog_unlocked_by_deep "$id"; then
+    return 1
+  fi
   if task_is_disabled "$id"; then
     return 1
   fi
@@ -150,6 +280,10 @@ should_run() {
 
 skip_reason_for() {
   local id="$1"
+  if ! hog_is_in_enabled_set "$id" && ! hog_unlocked_by_deep "$id"; then
+    echo "not adopted (default off)"
+    return
+  fi
   if task_is_disabled "$id"; then
     echo "disabled in config"
     return
@@ -159,6 +293,22 @@ skip_reason_for() {
     return
   fi
   echo "skipped"
+}
+
+# One-row hog line for CLI amble
+# Args: id size_str label [state]
+hog_row() {
+  local id="$1" size="$2" label="$3" state="${4:-}"
+  local emoji="$HOG_EMOJI" i
+  i="$(task_index "$id" 2>/dev/null || true)"
+  if [[ -n "$i" ]]; then
+    emoji="${JANITOR_TASK_EMOJIS[$i]:-$HOG_EMOJI}"
+  fi
+  if [[ -n "$state" ]]; then
+    printf '%s  %-18s %8s  %s  [%s]\n' "$emoji" "$id" "$size" "$label" "$state"
+  else
+    printf '%s  %-18s %8s  %s\n' "$emoji" "$id" "$size" "$label"
+  fi
 }
 
 # Portable PATH so Finder / launchd find brew, node, flutter, etc.
@@ -218,13 +368,168 @@ list_tasks() {
     label="${JANITOR_TASK_LABELS[$i]}"
     if task_is_disabled "$id"; then
       state="disabled"
-    else
+    elif hog_is_in_enabled_set "$id"; then
       state="enabled"
+    else
+      state="off"
     fi
     printf '%-18s %-10s %s\n' "$id" "$state" "$label"
   done
   echo
   echo "Config: $JANITOR_DISABLED_FILE"
+  echo "Hogs:   $JANITOR_HOGS_FILE"
   echo "Disable: janitor disable <id>"
   echo "Enable:  janitor enable <id>"
+  echo "Adopt:   janitor adopt <id>"
+}
+
+# Ensure user hogs file exists (commented template) when writing
+hogs_file_ensure() {
+  config_ensure
+  if [[ ! -f "$JANITOR_HOGS_FILE" ]]; then
+    cat >"$JANITOR_HOGS_FILE" <<'EOF'
+# Janitor — adopted / custom hogs (one per line)
+# Catalog: shipit
+# Custom:  custom:<id>|<path>|<mode>|<label>
+EOF
+  fi
+}
+
+cmd_adopt() {
+  local id="$1"
+  [[ -n "$id" ]] || { echo "usage: janitor adopt <id>" >&2; return 1; }
+  local idx
+  idx="$(task_index "$id" 2>/dev/null || true)"
+  [[ -n "$idx" ]] || { echo "janitor: unknown catalog id: $id (try: janitor discover)" >&2; return 1; }
+  if [[ "${JANITOR_TASK_CUSTOM[$idx]}" == "1" ]]; then
+    echo "already a custom hog: $id"
+    return 0
+  fi
+  hogs_file_ensure
+  if user_hog_listed "$id"; then
+    echo "already adopted: $id"
+    return 0
+  fi
+  # If already default on, still record adopt for clarity
+  echo "$id" >>"$JANITOR_HOGS_FILE"
+  JANITOR_TASK_DEFAULTS[$idx]="on"
+  echo "adopted: $id  ($JANITOR_HOGS_FILE)"
+}
+
+cmd_hog_add() {
+  local raw_path="$1"
+  local mode="${2:-contents}"
+  local id label path
+  [[ -n "$raw_path" ]] || { echo "usage: janitor hog add <path> [remove|contents]" >&2; return 1; }
+  path="$(hog_expand_path "$raw_path")"
+  path="$(abs_path "$path")"
+
+  if ! path_is_allowlisted "$path"; then
+    echo "janitor: REFUSED — path not under an allowlisted cache root: $path" >&2
+    echo "janitor: (Documents, Downloads, media, and personal files are never cleaned)" >&2
+    return 1
+  fi
+  case "$mode" in remove|contents) ;; *)
+    echo "janitor: mode must be remove or contents" >&2
+    return 1
+  ;; esac
+
+  id="custom_$(basename "$path" | tr -c 'A-Za-z0-9_-' '_' | tr '[:upper:]' '[:lower:]')"
+  id="${id%_}"
+  # Uniquify if needed
+  local n=1 base="$id"
+  while task_index "$id" >/dev/null 2>&1; do
+    id="${base}_$n"
+    n=$((n + 1))
+  done
+  label="$(basename "$path") cache"
+
+  hogs_file_ensure
+  printf 'custom:%s|%s|%s|%s\n' "$id" "$path" "$mode" "$label" >>"$JANITOR_HOGS_FILE"
+
+  JANITOR_TASK_IDS+=("$id")
+  JANITOR_TASK_KINDS+=("path")
+  JANITOR_TASK_PATHS+=("$path")
+  JANITOR_TASK_MODES+=("$mode")
+  JANITOR_TASK_DEFAULTS+=("on")
+  JANITOR_TASK_EMOJIS+=("$HOG_EMOJI")
+  JANITOR_TASK_LABELS+=("$label")
+  JANITOR_TASK_BLURBS+=("Custom path hog.")
+  JANITOR_TASK_CUSTOM+=("1")
+
+  echo "added hog: $id → $path"
+  hog_row "$id" "$(path_size "$path")" "$label" "custom"
+}
+
+# List all hogs as one-row amble
+cmd_hogs() {
+  local i id label size state path
+  section "Hogs"
+  if [[ ${#JANITOR_TASK_IDS[@]} -eq 0 ]]; then
+    echo "  (no hogs in catalog)"
+    return 0
+  fi
+  for i in "${!JANITOR_TASK_IDS[@]}"; do
+    id="${JANITOR_TASK_IDS[$i]}"
+    label="${JANITOR_TASK_LABELS[$i]}"
+    path="$(hog_measure_path "$id" 2>/dev/null || true)"
+    if [[ -n "$path" && -e "$path" ]]; then
+      size="$(fmt_kb "$(du_kb "$path")")"
+    else
+      size="—"
+    fi
+    if task_is_disabled "$id"; then
+      state="disabled"
+    elif hog_is_in_enabled_set "$id"; then
+      if [[ "${JANITOR_TASK_CUSTOM[$i]}" == "1" ]]; then
+        state="custom"
+      else
+        state="enabled"
+      fi
+    else
+      state="off"
+    fi
+    hog_row "$id" "$size" "$label" "$state"
+  done
+  echo
+  echo "${C_DIM}Policy: dev caches only — never Documents, Downloads, or media.${C_RESET}"
+  echo "${C_DIM}Adopt: janitor adopt <id>   Add: janitor hog add <path>${C_RESET}"
+}
+
+# Discover: default-off or not-enabled catalog hogs that exist on disk
+cmd_discover() {
+  local i id label size path blurb found=0
+  section "Discover hogs"
+  for i in "${!JANITOR_TASK_IDS[@]}"; do
+    id="${JANITOR_TASK_IDS[$i]}"
+    # Skip already enabled & not disabled
+    if hog_is_in_enabled_set "$id" && ! task_is_disabled "$id"; then
+      continue
+    fi
+    path="$(hog_measure_path "$id" 2>/dev/null || true)"
+    [[ -n "$path" && -e "$path" ]] || continue
+    local kb
+    kb="$(du_kb "$path")"
+    [[ "$kb" -gt 0 ]] || continue
+    size="$(fmt_kb "$kb")"
+    label="${JANITOR_TASK_LABELS[$i]}"
+    blurb="${JANITOR_TASK_BLURBS[$i]}"
+    hog_row "$id" "$size" "$label" "suggest"
+    if [[ -n "$blurb" ]]; then
+      echo "    ${C_DIM}${blurb}${C_RESET}"
+    fi
+    found=1
+  done
+  if [[ "$found" -eq 0 ]]; then
+    echo "  (no new hogs found — your enabled set covers what's on disk)"
+  else
+    echo
+    echo "${C_DIM}Adopt a suggestion: janitor adopt <id>${C_RESET}"
+  fi
+}
+
+# Load catalog + user hogs (call after JANITOR_HOME is set)
+janitor_hogs_init() {
+  catalog_load
+  user_hogs_load
 }

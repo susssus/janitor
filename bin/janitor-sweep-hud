@@ -48,7 +48,7 @@ if [[ -x "$SWIFT_BIN" ]]; then
   fi
 fi
 
-hudlog "Swift HUD missing — cannot run multi-phase session"
+hudlog "Swift HUD missing: cannot run multi-phase session"
 if [[ -n "$SESSION" ]]; then
   echo "ERROR: Swift HUD binary missing; rebuild with desktop/build-app.sh" >&2
   exit 1

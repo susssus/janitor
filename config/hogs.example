@@ -1,6 +1,6 @@
-# Janitor — adopted / custom hogs
+# Janitor : adopted / custom hogs
 # Lives at: ~/.config/janitor/hogs
-# Created by: janitor adopt <id>  or  janitor hog add <path>
+# Created by: janitor adopt <id> or janitor hog add <path>
 #
 # Catalog adopt (one id per line):
 # shipit

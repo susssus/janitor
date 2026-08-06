@@ -1,5 +1,5 @@
 #!/bin/bash
-# janitor-desktop — sweeper box: welcome → assess → choose → sweep → done
+# janitor-desktop : sweeper box: welcome → assess → choose → sweep → done
 set -euo pipefail
 
 JANITOR_HOME="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
@@ -21,26 +21,26 @@ HUD_SESSION=""
 EVENTS_OFFSET=0
 
 osascript_escape() {
-  printf '%s' "$1" | sed 's/\\/\\\\/g; s/"/\\"/g'
+ printf '%s' "$1" | sed 's/\\/\\\\/g; s/"/\\"/g'
 }
 
 dbg() {
-  local msg="$*"
-  local line
-  line="$(date '+%Y-%m-%d %H:%M:%S') [pid=$$] $msg"
-  mkdir -p "$JANITOR_LOG_DIR" 2>/dev/null || true
-  printf '%s\n' "$line" >>"$DESKTOP_DEBUG_LOG" 2>/dev/null || true
-  printf '%s\n' "$line" >&2 || true
+ local msg="$*"
+ local line
+ line="$(date '+%Y-%m-%d %H:%M:%S') [pid=$$] $msg"
+ mkdir -p "$JANITOR_LOG_DIR" 2>/dev/null || true
+ printf '%s\n' "$line" >>"$DESKTOP_DEBUG_LOG" 2>/dev/null || true
+ printf '%s\n' "$line" >&2 || true
 }
 
 notify() {
-  local title="$1" body="$2"
-  osascript -e "display notification \"$(osascript_escape "$body")\" with title \"$(osascript_escape "$title")\"" 2>/dev/null || true
+ local title="$1" body="$2"
+ osascript -e "display notification \"$(osascript_escape "$body")\" with title \"$(osascript_escape "$title")\"" 2>/dev/null || true
 }
 
 alert() {
-  local message="$1"
-  osascript <<EOF
+ local message="$1"
+ osascript <<EOF
 display dialog "$(osascript_escape "$message")" with title "Janitor" buttons {"OK"} default button "OK" with icon note
 EOF
 }
@@ -48,207 +48,207 @@ EOF
 # --- HUD session helpers ---------------------------------------------------
 
 hud_cmd() {
-  [[ -n "${HUD_SESSION:-}" ]] || return 0
-  # fflush-friendly append
-  printf '%s\n' "$*" >>"$HUD_SESSION/cmd"
+ [[ -n "${HUD_SESSION:-}" ]] || return 0
+ # fflush-friendly append
+ printf '%s\n' "$*" >>"$HUD_SESSION/cmd"
 }
 
 hud_start() {
-  HUD_SESSION="$(mktemp -d "${TMPDIR:-/tmp}/janitor-hud.XXXXXX")"
-  export JANITOR_HUD_LOG="$DESKTOP_DEBUG_LOG"
-  dbg "HUD session=$HUD_SESSION"
+ HUD_SESSION="$(mktemp -d "${TMPDIR:-/tmp}/janitor-hud.XXXXXX")"
+ export JANITOR_HUD_LOG="$DESKTOP_DEBUG_LOG"
+ dbg "HUD session=$HUD_SESSION"
 
-  if [[ ! -x "$JANITOR_HUD" ]]; then
-    dbg "HUD missing: $JANITOR_HUD"
-    alert "Janitor sweeper box missing.
+ if [[ ! -x "$JANITOR_HUD" ]]; then
+ dbg "HUD missing: $JANITOR_HUD"
+ alert "Janitor sweeper box missing.
 
 $JANITOR_HUD
 
 Re-run: ./desktop/build-app.sh"
-    exit 1
-  fi
+ exit 1
+ fi
 
-  "$JANITOR_HUD" --session "$HUD_SESSION" >>"$DESKTOP_DEBUG_LOG" 2>&1 &
-  HUD_PID=$!
-  dbg "HUD started pid=$HUD_PID"
+ "$JANITOR_HUD" --session "$HUD_SESSION" >>"$DESKTOP_DEBUG_LOG" 2>&1 &
+ HUD_PID=$!
+ dbg "HUD started pid=$HUD_PID"
 
-  local i=0
-  while [[ $i -lt 100 ]]; do
-    [[ -f "$HUD_SESSION/ready" ]] && break
-    kill -0 "$HUD_PID" 2>/dev/null || break
-    sleep 0.05
-    i=$((i + 1))
-  done
-  if [[ -f "$HUD_SESSION/ready" ]]; then
-    dbg "HUD ready"
-  else
-    dbg "HUD failed to become ready"
-    alert "Janitor sweeper box failed to open.
+ local i=0
+ while [[ $i -lt 100 ]]; do
+ [[ -f "$HUD_SESSION/ready" ]] && break
+ kill -0 "$HUD_PID" 2>/dev/null || break
+ sleep 0.05
+ i=$((i + 1))
+ done
+ if [[ -f "$HUD_SESSION/ready" ]]; then
+ dbg "HUD ready"
+ else
+ dbg "HUD failed to become ready"
+ alert "Janitor sweeper box failed to open.
 
 See $DESKTOP_DEBUG_LOG"
-    exit 1
-  fi
-  EVENTS_OFFSET=0
+ exit 1
+ fi
+ EVENTS_OFFSET=0
 }
 
 hud_stop() {
-  local pid="${HUD_PID:-}"
-  HUD_PID=""
-  if [[ -n "$pid" ]]; then
-    dbg "HUD stop pid=$pid"
-    hud_cmd "quit" 2>/dev/null || true
-    sleep 0.15
-    pkill -P "$pid" 2>/dev/null || true
-    kill "$pid" 2>/dev/null || true
-    wait "$pid" 2>/dev/null || true
-  fi
-  pkill -f 'janitor-sweep-hud' 2>/dev/null || true
-  if [[ -n "${HUD_SESSION:-}" ]]; then
-    rm -rf "$HUD_SESSION" 2>/dev/null || true
-    HUD_SESSION=""
-  fi
+ local pid="${HUD_PID:-}"
+ HUD_PID=""
+ if [[ -n "$pid" ]]; then
+ dbg "HUD stop pid=$pid"
+ hud_cmd "quit" 2>/dev/null || true
+ sleep 0.15
+ pkill -P "$pid" 2>/dev/null || true
+ kill "$pid" 2>/dev/null || true
+ wait "$pid" 2>/dev/null || true
+ fi
+ pkill -f 'janitor-sweep-hud' 2>/dev/null || true
+ if [[ -n "${HUD_SESSION:-}" ]]; then
+ rm -rf "$HUD_SESSION" 2>/dev/null || true
+ HUD_SESSION=""
+ fi
 }
 
 trap 'dbg "EXIT trap"; hud_stop' EXIT
 
 # Wait for next HUD event (start / start_deep / cancel / sweep … / ok).
-# IMPORTANT: must not run under command substitution — EVENT_QUEUE / EVENTS_OFFSET
+# IMPORTANT: must not run under command substitution : EVENT_QUEUE / EVENTS_OFFSET
 # live in this shell. Callers use: hud_next_event; event="$HUD_EVENT"
 EVENT_QUEUE=()
 HUD_EVENT=""
 
 hud_poll_events() {
-  local events="$HUD_SESSION/events"
-  [[ -f "$events" ]] || return 0
-  local size
-  size="$(wc -c <"$events" | tr -d ' ')"
-  if [[ "$size" -le "$EVENTS_OFFSET" ]]; then
-    return 0
-  fi
-  local chunk
-  chunk="$(dd if="$events" bs=1 skip="$EVENTS_OFFSET" 2>/dev/null || true)"
-  EVENTS_OFFSET=$size
-  local line
-  while IFS= read -r line || [[ -n "$line" ]]; do
-    [[ -z "$line" ]] && continue
-    [[ "$line" == "ready" ]] && continue
-    EVENT_QUEUE+=("$line")
-  done <<<"$chunk"
+ local events="$HUD_SESSION/events"
+ [[ -f "$events" ]] || return 0
+ local size
+ size="$(wc -c <"$events" | tr -d ' ')"
+ if [[ "$size" -le "$EVENTS_OFFSET" ]]; then
+ return 0
+ fi
+ local chunk
+ chunk="$(dd if="$events" bs=1 skip="$EVENTS_OFFSET" 2>/dev/null || true)"
+ EVENTS_OFFSET=$size
+ local line
+ while IFS= read -r line || [[ -n "$line" ]]; do
+ [[ -z "$line" ]] && continue
+ [[ "$line" == "ready" ]] && continue
+ EVENT_QUEUE+=("$line")
+ done <<<"$chunk"
 }
 
 hud_next_event() {
-  HUD_EVENT=""
-  while true; do
-    if [[ ${#EVENT_QUEUE[@]} -gt 0 ]]; then
-      HUD_EVENT="${EVENT_QUEUE[0]}"
-      EVENT_QUEUE=("${EVENT_QUEUE[@]:1}")
-      return 0
-    fi
-    if ! kill -0 "$HUD_PID" 2>/dev/null; then
-      HUD_EVENT="cancel"
-      return 0
-    fi
-    hud_poll_events
-    if [[ ${#EVENT_QUEUE[@]} -gt 0 ]]; then
-      continue
-    fi
-    sleep 0.05
-  done
+ HUD_EVENT=""
+ while true; do
+ if [[ ${#EVENT_QUEUE[@]} -gt 0 ]]; then
+ HUD_EVENT="${EVENT_QUEUE[0]}"
+ EVENT_QUEUE=("${EVENT_QUEUE[@]:1}")
+ return 0
+ fi
+ if ! kill -0 "$HUD_PID" 2>/dev/null; then
+ HUD_EVENT="cancel"
+ return 0
+ fi
+ hud_poll_events
+ if [[ ${#EVENT_QUEUE[@]} -gt 0 ]]; then
+ continue
+ fi
+ sleep 0.05
+ done
 }
 
 # Drop any stale events left over from a previous phase (e.g. duplicate clicks).
 hud_drain_events() {
-  hud_poll_events
-  EVENT_QUEUE=()
+ hud_poll_events
+ EVENT_QUEUE=()
 }
 
 # Stream janitor output into HUD log lines; also tee to a capture file.
 stream_to_hud() {
-  local capture="$1"
-  shift
-  : >"$capture"
-  # Line-buffer if available
-  if command -v stdbuf >/dev/null 2>&1; then
-    stdbuf -oL -eL "$@" 2>&1 | tee -a "$capture" | while IFS= read -r line || [[ -n "$line" ]]; do
-      hud_cmd "log $line"
-    done
-  else
-    "$@" 2>&1 | tee -a "$capture" | while IFS= read -r line || [[ -n "$line" ]]; do
-      hud_cmd "log $line"
-    done
-  fi
-  return "${PIPESTATUS[0]:-0}"
+ local capture="$1"
+ shift
+ : >"$capture"
+ # Line-buffer if available
+ if command -v stdbuf >/dev/null 2>&1; then
+ stdbuf -oL -eL "$@" 2>&1 | tee -a "$capture" | while IFS= read -r line || [[ -n "$line" ]]; do
+ hud_cmd "log $line"
+ done
+ else
+ "$@" 2>&1 | tee -a "$capture" | while IFS= read -r line || [[ -n "$line" ]]; do
+ hud_cmd "log $line"
+ done
+ fi
+ return "${PIPESTATUS[0]:-0}"
 }
 
 log_task_summary() {
-  local logfile="$1"
-  local max="${2:-20}"
-  if [[ ! -f "$logfile" ]]; then
-    echo "(no log yet)"
-    return 0
-  fi
-  local lines
-  # Task rows (kaomoji + status) and the full-path lines under them
-  lines="$(grep -E '\[(ok|dry-run|skip|refuse|done)\]|^    /' "$logfile" 2>/dev/null | tail -n "$max")"
-  if [[ -z "$lines" ]]; then
-    echo "(no task lines)"
-  else
-    printf '%s\n' "$lines"
-  fi
+ local logfile="$1"
+ local max="${2:-20}"
+ if [[ ! -f "$logfile" ]]; then
+ echo "(no log yet)"
+ return 0
+ fi
+ local lines
+ # Task rows (kaomoji + status) and the full-path lines under them
+ lines="$(grep -E '\[(ok|dry run|skip|refuse|done)\]|^ /' "$logfile" 2>/dev/null | tail -n "$max")"
+ if [[ -z "$lines" ]]; then
+ echo "(no task lines)"
+ else
+ printf '%s\n' "$lines"
+ fi
 }
 
 # Build choose items from assess TSV into HUD.
 # item id \t title \t because \t tradeoff \t educate(¶=newline)
 hud_send_choose_items() {
-  local assess="$JANITOR_ASSESS_TSV"
-  local count=0 id label freed status title because swipe edu edu_wire
-  hud_cmd "phase choose"
-  if [[ ! -f "$assess" ]]; then
-    hud_cmd "items_end"
-    echo 0
-    return 0
-  fi
-  while IFS=$'\t' read -r id label freed status; do
-    [[ "$id" == "id" ]] && continue
-    [[ -z "$id" ]] && continue
-    [[ "${freed:-0}" -gt 0 ]] || continue
-    title="${id} — ${label} ($(fmt_kb "$freed"))"
-    because="$(task_hogging_because "$id")"
-    swipe="$(task_if_you_swipe "$id")"
-    edu="$(task_educate "$id")"
-    edu_wire="${edu//$'\n'/¶}"
-    hud_cmd "item ${id}"$'\t'"${title}"$'\t'"${because}"$'\t'"${swipe}"$'\t'"${edu_wire}"
-    count=$((count + 1))
-  done <"$assess"
-  hud_cmd "items_end"
-  echo "$count"
+ local assess="$JANITOR_ASSESS_TSV"
+ local count=0 id label freed status title because swipe edu edu_wire
+ hud_cmd "phase choose"
+ if [[ ! -f "$assess" ]]; then
+ hud_cmd "items_end"
+ echo 0
+ return 0
+ fi
+ while IFS=$'\t' read -r id label freed status; do
+ [[ "$id" == "id" ]] && continue
+ [[ -z "$id" ]] && continue
+ [[ "${freed:-0}" -gt 0 ]] || continue
+ title="${id}: ${label} ($(fmt_kb "$freed"))"
+ because="$(task_hogging_because "$id")"
+ swipe="$(task_if_you_swipe "$id")"
+ edu="$(task_educate "$id")"
+ edu_wire="${edu//$'\n'/¶}"
+ hud_cmd "item ${id}"$'\t'"${title}"$'\t'"${because}"$'\t'"${swipe}"$'\t'"${edu_wire}"
+ count=$((count + 1))
+ done <"$assess"
+ hud_cmd "items_end"
+ echo "$count"
 }
 
 # Educational done summary for selected ids (uses post-clean assess TSV)
 hud_send_swept_edu() {
-  local selected="$1"
-  local id label because swipe path freed_kb size
-  local IFS=','
-  # shellcheck disable=SC2086
-  set -- $selected
-  for id in "$@"; do
-    [[ -z "$id" ]] && continue
-    label="$(task_label "$id")"
-    because="$(task_hogging_because "$id")"
-    swipe="$(task_if_you_swipe "$id")"
-    path="$(hog_measure_path "$id" 2>/dev/null || true)"
-    freed_kb=0
-    if [[ -f "$JANITOR_ASSESS_TSV" ]]; then
-      freed_kb="$(awk -F'\t' -v id="$id" '$1==id {print $3; exit}' "$JANITOR_ASSESS_TSV" 2>/dev/null || true)"
-      freed_kb="${freed_kb:-0}"
-    fi
-    size="$(fmt_kb "${freed_kb:-0}")"
-    hud_cmd "done_line ${HOG_EMOJI} ${label} — freed ${size}"
-    [[ -n "$because" ]] && hud_cmd "done_line    ${because}"
-    [[ -n "$swipe" ]] && hud_cmd "done_line    ${swipe}"
-    [[ -n "$path" ]] && hud_cmd "done_line    ${path}"
-    hud_cmd "done_line "
-  done
+ local selected="$1"
+ local id label because swipe path freed_kb size
+ local IFS=','
+ # shellcheck disable=SC2086
+ set -- $selected
+ for id in "$@"; do
+ [[ -z "$id" ]] && continue
+ label="$(task_label "$id")"
+ because="$(task_hogging_because "$id")"
+ swipe="$(task_if_you_swipe "$id")"
+ path="$(hog_measure_path "$id" 2>/dev/null || true)"
+ freed_kb=0
+ if [[ -f "$JANITOR_ASSESS_TSV" ]]; then
+ freed_kb="$(awk -F'\t' -v id="$id" '$1==id {print $3; exit}' "$JANITOR_ASSESS_TSV" 2>/dev/null || true)"
+ freed_kb="${freed_kb:-0}"
+ fi
+ size="$(fmt_kb "${freed_kb:-0}")"
+ hud_cmd "done_line ${HOG_EMOJI} ${label}: freed ${size}"
+ [[ -n "$because" ]] && hud_cmd "done_line ${because}"
+ [[ -n "$swipe" ]] && hud_cmd "done_line ${swipe}"
+ [[ -n "$path" ]] && hud_cmd "done_line ${path}"
+ hud_cmd "done_line "
+ done
 }
 
 # --- Main flow -------------------------------------------------------------
@@ -267,25 +267,25 @@ dbg "welcome event=$event"
 DEEP_FLAG=""
 BRAVE_FLAG=""
 case "$event" in
-  start) DEEP_FLAG=""; BRAVE_FLAG="" ;;
-  start_deep) DEEP_FLAG="--deep"; BRAVE_FLAG="" ;;
-  start_brave) DEEP_FLAG=""; BRAVE_FLAG="--brave" ;;
-  cancel|"")
-    dbg "cancelled at welcome"
-    exit 0
-    ;;
-  *)
-    dbg "unexpected welcome event: $event"
-    exit 0
-    ;;
+ start) DEEP_FLAG=""; BRAVE_FLAG="" ;;
+ start_deep) DEEP_FLAG="--deep"; BRAVE_FLAG="" ;;
+ start_brave) DEEP_FLAG=""; BRAVE_FLAG="--brave" ;;
+ cancel|"")
+ dbg "cancelled at welcome"
+ exit 0
+ ;;
+ *)
+ dbg "unexpected welcome event: $event"
+ exit 0
+ ;;
 esac
 
 # CLI overrides from janitor desktop --brave / --deep
 if [[ "${JANITOR_DESKTOP_DEEP:-0}" == "1" || "${JANITOR_DESKTOP_DEEP:-}" == "1" ]]; then
-  DEEP_FLAG="--deep"
+ DEEP_FLAG="--deep"
 fi
 if [[ -n "${JANITOR_DESKTOP_BRAVE:-}" ]]; then
-  BRAVE_FLAG="--brave"
+ BRAVE_FLAG="--brave"
 fi
 
 # --- Assess ---
@@ -307,44 +307,44 @@ item_count="$(hud_send_choose_items)"
 dbg "choose items=$item_count"
 
 if [[ "$item_count" -eq 0 ]]; then
-  hud_cmd "phase done"
-  assess_kb="$(assess_total_freed_kb)"
-  assess_size="$(fmt_kb "$assess_kb")"
-  hud_cmd "subtitle Nothing to reclaim right now"
-  hud_cmd "done_line Disk freed: ${assess_size}"
-  hud_cmd "done_line (no hogs had reclaimable space this round)"
-  hud_cmd "done_line "
-  hud_cmd "done_line Full log:"
-  hud_cmd "done_line ${assess_log:-none}"
-  hud_cmd "done_end"
-  hud_next_event
-  dbg "empty-done event=$HUD_EVENT"
-  exit 0
+ hud_cmd "phase done"
+ assess_kb="$(assess_total_freed_kb)"
+ assess_size="$(fmt_kb "$assess_kb")"
+ hud_cmd "subtitle Nothing to reclaim right now"
+ hud_cmd "done_line Disk freed: ${assess_size}"
+ hud_cmd "done_line (no hogs had reclaimable space this round)"
+ hud_cmd "done_line "
+ hud_cmd "done_line Full log:"
+ hud_cmd "done_line ${assess_log:-none}"
+ hud_cmd "done_end"
+ hud_next_event
+ dbg "empty-done event=$HUD_EVENT"
+ exit 0
 fi
 
 # Wait until user picks tasks (or cancels). Ignore stale welcome clicks.
 while true; do
-  hud_next_event
-  event="$HUD_EVENT"
-  dbg "choose event=$event"
-  case "$event" in
-    start|start_deep|start_brave)
-      dbg "ignoring stale welcome event during choose"
-      continue
-      ;;
-    cancel|"")
-      notify "Janitor" "Cleanup cancelled — nothing deleted."
-      exit 0
-      ;;
-    sweep\ *)
-      selected="${event#sweep }"
-      break
-      ;;
-    *)
-      dbg "unexpected choose event: $event"
-      exit 0
-      ;;
-  esac
+ hud_next_event
+ event="$HUD_EVENT"
+ dbg "choose event=$event"
+ case "$event" in
+ start|start_deep|start_brave)
+ dbg "ignoring stale welcome event during choose"
+ continue
+ ;;
+ cancel|"")
+ notify "Janitor" "Cleanup cancelled. Nothing deleted."
+ exit 0
+ ;;
+ sweep\ *)
+ selected="${event#sweep }"
+ break
+ ;;
+ *)
+ dbg "unexpected choose event: $event"
+ exit 0
+ ;;
+ esac
 done
 
 [[ -z "$selected" ]] && exit 0
@@ -367,7 +367,7 @@ disk_size="$(fmt_kb "${disk_kb:-0}")"
 result_line="Disk freed: ${disk_size}"
 subtitle_line="Disk freed: ${disk_size}"
 if [[ "${disk_tasks:-0}" -gt 0 ]]; then
-  subtitle_line="Disk freed: ${disk_size} across ${disk_tasks} hogs"
+ subtitle_line="Disk freed: ${disk_size} across ${disk_tasks} hogs"
 fi
 dbg "done disk_kb=$disk_kb disk_size=$disk_size tasks=$disk_tasks"
 
@@ -376,16 +376,21 @@ hud_drain_events
 hud_cmd "phase done"
 hud_cmd "subtitle ${subtitle_line}"
 hud_cmd "done_line ════════════════════════════════════"
-hud_cmd "done_line   DISK FREED:  ${disk_size}"
-hud_cmd "done_line   (${disk_tasks} hogs swept · measured reclaim)"
+hud_cmd "done_line DISK FREED: ${disk_size}"
+hud_cmd "done_line (${disk_tasks} hogs swept · measured reclaim)"
 hud_cmd "done_line ════════════════════════════════════"
 hud_cmd "done_line "
-hud_cmd "done_line Benefit of the sweep: reclaimable caches left the disk."
+if [[ "${disk_kb:-0}" -gt 0 ]]; then
+ hud_cmd "done_line Benefit of the sweep: reclaimable caches left the disk."
+else
+ hud_cmd "done_line Measured reclaim was 0K. The hog ran, but brew/npm/etc had nothing unused to drop right now."
+ hud_cmd "done_line (A big cache folder is not always the same as reclaimable space.)"
+fi
 hud_cmd "done_line "
 hud_cmd "done_line Disk hogs vs RAM hogs:"
-hud_cmd "done_line   Disk hogs = files on your SSD (caches). Janitor sweeps those → frees gigabytes."
-hud_cmd "done_line   RAM hogs = apps holding memory now. Quit apps / restart to free RAM."
-hud_cmd "done_line   Deleting caches does not empty RAM. The RAM block in the log is a snapshot only."
+hud_cmd "done_line Disk hogs = files on your SSD (caches). Janitor sweeps those → frees gigabytes."
+hud_cmd "done_line RAM hogs = apps holding memory now. Quit apps / restart to free RAM."
+hud_cmd "done_line Deleting caches does not empty RAM. The RAM block in the log is a snapshot only."
 hud_cmd "done_line "
 hud_cmd "done_line Swept:"
 hud_cmd "done_line "

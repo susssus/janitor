@@ -1,5 +1,5 @@
 #!/bin/bash
-# Checkbox picker for Janitor desktop — real per-row NSButton switches.
+# Checkbox picker for Janitor desktop: real per-row NSButton switches.
 # Usage: janitor-choose-tasks <items-file>
 #   items-file TSV rows: id<TAB>title<TAB>blurb
 # Stdout: selected ids (newline-separated), or CANCEL / __EMPTY__

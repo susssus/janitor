@@ -2,17 +2,19 @@
 
 Mac development housekeeper. Reclaims disk from **`~/Library`** caches/logs/dev leftovers and known tool caches (`~/.gradle`, `~/.npm`, `~/.pub-cache`, …).
 
-## Desktop button (two-phase)
+## Desktop button (sweeper box)
 
 ```bash
 ./install.sh --desktop
 ```
 
-Puts **Janitor.app** on your Desktop. Double-click:
+Puts **Janitor.app** on your Desktop. Double-click opens the **sweeper box**:
 
-1. **Assess** (or Assess deep) — dry-run; nothing deleted  
-2. **Check** what to clean — checkbox on each row (none checked by default; Check all / Uncheck all buttons)  
-3. **Sweep now** — broom overlay starts immediately; cleans only what you checked  
+1. **Welcome** — Start sweep or Start deep (nothing deleted yet)  
+2. **Assessing** — live indexing log while gauging reclaimable caches  
+3. **Choose** — check what to clean (none checked by default; Check all / Uncheck all)  
+4. **Sweeping** — live clean log for the tasks you checked  
+5. **Done** — hooray + freed summary + swept task lines  
 
 Permanent skips: `janitor disable <id>` (saved in `~/.config/janitor/disabled`).
 
@@ -37,7 +39,7 @@ Config is per-user and portable: `~/.config/janitor/disabled` (see `config/disab
 
 ```bash
 ./install.sh            # symlink ~/bin/janitor + create log dir
-./install.sh --desktop  # Desktop Janitor.app (assess → confirm → clean)
+./install.sh --desktop  # Desktop Janitor.app (sweeper box UI)
 ./install.sh --schedule # also: weekly LaunchAgent (Sun 10:00)
 ```
 
@@ -45,7 +47,7 @@ Ensure `~/bin` is on your `PATH`, then:
 
 ```bash
 janitor status              # disk + reclaimable sizes (sorted)
-janitor desktop             # GUI: assess → check tasks → clean
+janitor desktop             # GUI: sweeper box (welcome → assess → choose → sweep → done)
 janitor tasks               # enable/disable list
 janitor clean --dry-run     # preview + write log (no deletes)
 janitor clean               # clean + always log what/how much
@@ -97,11 +99,11 @@ Still never touches Documents/Downloads, Docker.raw, full Cursor Application Sup
 
 ```
 bin/janitor
-bin/janitor-desktop   # assess → checkbox opt-in → clean
-bin/janitor-choose-tasks  # Cocoa per-row checkbox picker
-bin/janitor-sweep-hud # launches floating broom overlay during assess/clean
-bin/janitor-sweep-hud.appbin  # compiled Swift overlay (built by desktop/build-app.sh)
-desktop/sweep-hud/    # Swift source for the overlay
+bin/janitor-desktop   # sweeper box orchestrator (welcome → assess → choose → sweep → done)
+bin/janitor-sweep-hud # launches multi-phase Swift sweeper box
+bin/janitor-sweep-hud.appbin  # compiled Swift UI (built by desktop/build-app.sh)
+bin/janitor-choose-tasks  # legacy standalone checkbox picker (unused in happy path)
+desktop/sweep-hud/    # Swift source for the sweeper box
 lib/common.sh
 lib/config.sh         # ~/.config/janitor + portable PATH
 lib/cleaners.sh

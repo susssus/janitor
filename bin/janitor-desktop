@@ -1,5 +1,5 @@
 #!/bin/bash
-# janitor-desktop — assess → checkbox opt-in → clean
+# janitor-desktop — sweeper box: welcome → assess → choose → sweep → done
 set -euo pipefail
 
 JANITOR_HOME="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
@@ -15,6 +15,9 @@ janitor_augment_path
 config_ensure
 
 DESKTOP_DEBUG_LOG="${JANITOR_LOG_DIR}/desktop-debug.log"
+HUD_PID=""
+HUD_SESSION=""
+EVENTS_OFFSET=0
 
 osascript_escape() {
   printf '%s' "$1" | sed 's/\\/\\\\/g; s/"/\\"/g'
@@ -29,100 +32,143 @@ dbg() {
   printf '%s\n' "$line" >&2 || true
 }
 
-dialog() {
-  local message="$1" default_btn="$2"
-  shift 2
-  local buttons=("$@") btn_list="" b
-  for b in "${buttons[@]}"; do
-    [[ -n "$btn_list" ]] && btn_list+=", "
-    btn_list+="\"$(osascript_escape "$b")\""
-  done
-  local msg_esc default_esc
-  msg_esc="$(osascript_escape "$message")"
-  default_esc="$(osascript_escape "$default_btn")"
-  osascript <<EOF
-try
-  set r to button returned of (display dialog "${msg_esc}" with title "Janitor" buttons {${btn_list}} default button "${default_esc}" with icon caution)
-  return r
-on error number -128
-  return "Cancel"
-end try
-EOF
-}
-
 notify() {
   local title="$1" body="$2"
   osascript -e "display notification \"$(osascript_escape "$body")\" with title \"$(osascript_escape "$title")\"" 2>/dev/null || true
 }
 
-SWEEP_ANIM_PID=""
-SWEEP_READY_FILE=""
+alert() {
+  local message="$1"
+  osascript <<EOF
+display dialog "$(osascript_escape "$message")" with title "🧹 Janitor" buttons {"OK"} default button "OK" with icon note
+EOF
+}
 
-# Floating desktop HUD (bright orange NSPanel at screen-saver level).
-# Starts immediately; does not block the caller for long — work can begin in parallel.
-sweep_anim_start() {
-  local phase="${1:-Sweeping}"
-  sweep_anim_stop
+# --- HUD session helpers ---------------------------------------------------
+
+hud_cmd() {
+  [[ -n "${HUD_SESSION:-}" ]] || return 0
+  # fflush-friendly append
+  printf '%s\n' "$*" >>"$HUD_SESSION/cmd"
+}
+
+hud_start() {
+  HUD_SESSION="$(mktemp -d "${TMPDIR:-/tmp}/janitor-hud.XXXXXX")"
+  export JANITOR_HUD_LOG="$DESKTOP_DEBUG_LOG"
+  dbg "HUD session=$HUD_SESSION"
+
   if [[ ! -x "$JANITOR_HUD" ]]; then
-    dbg "HUD missing or not executable: $JANITOR_HUD — falling back to notifications"
-    (
-      local frames=("🧹" "🧹 💨" "💨 🧹" "✨ 🧹")
-      local i=0 n=${#frames[@]}
-      while true; do
-        notify "${frames[$i]} Janitor" "${phase} underway…"
-        i=$(( (i + 1) % n ))
-        sleep 0.75
-      done
-    ) &
-    SWEEP_ANIM_PID=$!
-    dbg "fallback notify anim started pid=$SWEEP_ANIM_PID phase=$phase"
-    return 0
+    dbg "HUD missing: $JANITOR_HUD"
+    alert "Janitor sweeper box missing.
+
+$JANITOR_HUD
+
+Re-run: ./desktop/build-app.sh"
+    exit 1
   fi
 
-  SWEEP_READY_FILE="$(mktemp "${TMPDIR:-/tmp}/janitor-hud-ready.XXXXXX")"
-  rm -f "$SWEEP_READY_FILE"
-  export JANITOR_HUD_LOG="$DESKTOP_DEBUG_LOG"
+  "$JANITOR_HUD" --session "$HUD_SESSION" >>"$DESKTOP_DEBUG_LOG" 2>&1 &
+  HUD_PID=$!
+  dbg "HUD started pid=$HUD_PID"
 
-  # Launch HUD first thing — before any heavy work
-  "$JANITOR_HUD" "$phase" "$SWEEP_READY_FILE" >>"$DESKTOP_DEBUG_LOG" 2>&1 &
-  SWEEP_ANIM_PID=$!
-  dbg "HUD started pid=$SWEEP_ANIM_PID phase=$phase ready=$SWEEP_READY_FILE"
-
-  # Brief yield so the first frame can map (~300ms max). Do not stall the clean/assess.
   local i=0
-  while [[ $i -lt 6 ]]; do
-    [[ -f "$SWEEP_READY_FILE" ]] && break
-    kill -0 "$SWEEP_ANIM_PID" 2>/dev/null || break
+  while [[ $i -lt 100 ]]; do
+    [[ -f "$HUD_SESSION/ready" ]] && break
+    kill -0 "$HUD_PID" 2>/dev/null || break
     sleep 0.05
     i=$((i + 1))
   done
-  if [[ -f "$SWEEP_READY_FILE" ]]; then
-    dbg "HUD ready confirmed"
+  if [[ -f "$HUD_SESSION/ready" ]]; then
+    dbg "HUD ready"
   else
-    dbg "HUD still warming (continuing work in parallel)"
+    dbg "HUD failed to become ready"
+    alert "Janitor sweeper box failed to open.
+
+See $DESKTOP_DEBUG_LOG"
+    exit 1
   fi
+  EVENTS_OFFSET=0
 }
 
-sweep_anim_stop() {
-  local pid="${SWEEP_ANIM_PID:-}"
-  SWEEP_ANIM_PID=""
-  if [[ -n "${SWEEP_READY_FILE:-}" ]]; then
-    rm -f "$SWEEP_READY_FILE" 2>/dev/null || true
-    SWEEP_READY_FILE=""
+hud_stop() {
+  local pid="${HUD_PID:-}"
+  HUD_PID=""
+  if [[ -n "$pid" ]]; then
+    dbg "HUD stop pid=$pid"
+    hud_cmd "quit" 2>/dev/null || true
+    sleep 0.15
+    pkill -P "$pid" 2>/dev/null || true
+    kill "$pid" 2>/dev/null || true
+    wait "$pid" 2>/dev/null || true
   fi
-  [[ -z "$pid" ]] && return 0
-  dbg "HUD stop requested pid=$pid"
-  # Kill wrapper and any children (swift / osascript)
-  pkill -P "$pid" 2>/dev/null || true
-  kill "$pid" 2>/dev/null || true
-  wait "$pid" 2>/dev/null || true
   pkill -f 'janitor-sweep-hud' 2>/dev/null || true
-  dbg "HUD stopped pid=$pid"
+  if [[ -n "${HUD_SESSION:-}" ]]; then
+    rm -rf "$HUD_SESSION" 2>/dev/null || true
+    HUD_SESSION=""
+  fi
 }
 
-trap 'dbg "EXIT trap"; sweep_anim_stop' EXIT
+trap 'dbg "EXIT trap"; hud_stop' EXIT
 
-# Task bullet lines from a session log (• npm cache  freed 1.2G …).
+# Wait for next HUD event (start / start_deep / cancel / sweep … / ok).
+EVENT_QUEUE=()
+
+hud_poll_events() {
+  local events="$HUD_SESSION/events"
+  [[ -f "$events" ]] || return 0
+  local size
+  size="$(wc -c <"$events" | tr -d ' ')"
+  if [[ "$size" -le "$EVENTS_OFFSET" ]]; then
+    return 0
+  fi
+  local chunk
+  chunk="$(dd if="$events" bs=1 skip="$EVENTS_OFFSET" 2>/dev/null || true)"
+  EVENTS_OFFSET=$size
+  local line
+  while IFS= read -r line || [[ -n "$line" ]]; do
+    [[ -z "$line" ]] && continue
+    [[ "$line" == "ready" ]] && continue
+    EVENT_QUEUE+=("$line")
+  done <<<"$chunk"
+}
+
+hud_next_event() {
+  while true; do
+    if [[ ${#EVENT_QUEUE[@]} -gt 0 ]]; then
+      printf '%s\n' "${EVENT_QUEUE[0]}"
+      EVENT_QUEUE=("${EVENT_QUEUE[@]:1}")
+      return 0
+    fi
+    if ! kill -0 "$HUD_PID" 2>/dev/null; then
+      echo "cancel"
+      return 0
+    fi
+    hud_poll_events
+    if [[ ${#EVENT_QUEUE[@]} -gt 0 ]]; then
+      continue
+    fi
+    sleep 0.05
+  done
+}
+
+# Stream janitor output into HUD log lines; also tee to a capture file.
+stream_to_hud() {
+  local capture="$1"
+  shift
+  : >"$capture"
+  # Line-buffer if available
+  if command -v stdbuf >/dev/null 2>&1; then
+    stdbuf -oL -eL "$@" 2>&1 | tee -a "$capture" | while IFS= read -r line || [[ -n "$line" ]]; do
+      hud_cmd "log $line"
+    done
+  else
+    "$@" 2>&1 | tee -a "$capture" | while IFS= read -r line || [[ -n "$line" ]]; do
+      hud_cmd "log $line"
+    done
+  fi
+  return "${PIPESTATUS[0]:-0}"
+}
+
 log_task_summary() {
   local logfile="$1"
   local max="${2:-15}"
@@ -139,194 +185,134 @@ log_task_summary() {
   fi
 }
 
-alert() {
-  local message="$1"
-  osascript <<EOF
-display dialog "$(osascript_escape "$message")" with title "🧹 Janitor" buttons {"OK"} default button "OK" with icon note
-EOF
-}
-
-# Build checkbox UI from last-assess.tsv; user checks what to clean (none by default).
-# Real per-row checkboxes via janitor-choose-tasks (Cocoa), not AppleScript list highlight.
-# Prints selected task ids as comma-separated on stdout; CANCEL / EMPTY on special cases.
-choose_tasks() {
+# Build choose items from assess TSV into HUD.
+hud_send_choose_items() {
   local assess="$JANITOR_ASSESS_TSV"
+  local count=0 id label freed status title blurb
+  hud_cmd "phase choose"
   if [[ ! -f "$assess" ]]; then
-    dbg "choose_tasks: assess TSV missing"
-    echo "EMPTY"
+    hud_cmd "items_end"
+    echo 0
     return 0
   fi
-
-  local items=() id label freed status title blurb
   while IFS=$'\t' read -r id label freed status; do
     [[ "$id" == "id" ]] && continue
     [[ -z "$id" ]] && continue
-    # Only offer tasks that would reclaim something
     [[ "${freed:-0}" -gt 0 ]] || continue
     title="${id} — ${label} ($(fmt_kb "$freed"))"
     blurb="$(task_blurb "$id")"
-    # TSV for chooser: id, title, blurb (blurb may be empty)
-    items+=("${id}"$'\t'"${title}"$'\t'"${blurb}")
+    # Escape nothing special beyond newlines — TSV already flat
+    hud_cmd "item ${id}"$'\t'"${title}"$'\t'"${blurb}"
+    count=$((count + 1))
   done <"$assess"
-
-  if [[ ${#items[@]} -eq 0 ]]; then
-    dbg "choose_tasks: no reclaimable tasks"
-    echo "EMPTY"
-    return 0
-  fi
-
-  dbg "choose_tasks: offering ${#items[@]} tasks"
-
-  local chooser="$JANITOR_HOME/bin/janitor-choose-tasks"
-  if [[ ! -x "$chooser" ]]; then
-    dbg "choose_tasks: chooser missing: $chooser"
-    alert "Janitor chooser missing:
-
-$chooser
-
-Re-run install or chmod +x bin/janitor-choose-tasks"
-    echo "CANCEL"
-    return 0
-  fi
-
-  local items_file chosen row selected_ids
-  items_file="$(mktemp "${TMPDIR:-/tmp}/janitor-choose.XXXXXX")"
-  if [[ ${#items[@]} -gt 0 ]]; then
-    printf '%s\n' "${items[@]}" >"$items_file"
-  else
-    : >"$items_file"
-  fi
-
-  while true; do
-    dbg "choose_tasks: launching checkbox UI file=$items_file"
-    chosen="$("$chooser" "$items_file" 2>>"$DESKTOP_DEBUG_LOG" || true)"
-    dbg "choose_tasks: raw choice=<<${chosen}>>"
-
-    if [[ "$chosen" == "CANCEL" || -z "$chosen" ]]; then
-      rm -f "$items_file"
-      echo "CANCEL"
-      return 0
-    fi
-
-    if [[ "$chosen" == "__EMPTY__" ]]; then
-      dialog \
-        "Nothing checked.
-
-Check at least one task to clean, or Cancel." \
-        "OK" "OK" >/dev/null
-      continue
-    fi
-
-    selected_ids=()
-    while IFS= read -r row; do
-      [[ -z "$row" ]] && continue
-      # Chooser returns bare task ids (one per line)
-      selected_ids+=("$row")
-    done <<<"$chosen"
-
-    if [[ ${#selected_ids[@]} -eq 0 ]]; then
-      dialog \
-        "Nothing checked.
-
-Check at least one task to clean, or Cancel." \
-        "OK" "OK" >/dev/null
-      continue
-    fi
-
-    rm -f "$items_file"
-    local IFS=,
-    echo "${selected_ids[*]}"
-    return 0
-  done
+  hud_cmd "items_end"
+  echo "$count"
 }
+
+# --- Main flow -------------------------------------------------------------
 
 dbg "=== janitor-desktop start ==="
 dbg "JANITOR_HOME=$JANITOR_HOME"
 dbg "HUD=$JANITOR_HUD executable=$([[ -x $JANITOR_HUD ]] && echo yes || echo no)"
-dbg "DESKTOP_DEEP=${JANITOR_DESKTOP_DEEP:-0}"
 
-# --- Phase 0 ---
-# Use a string (not empty array) so bash 3.2 + set -u never trips on "${arr[@]}".
+hud_start
+
+# Welcome is shown by HUD on launch. Wait for start / start_deep / cancel.
+event="$(hud_next_event)"
+dbg "welcome event=$event"
+
 DEEP_FLAG=""
-if [[ "${JANITOR_DESKTOP_DEEP:-0}" == "1" ]]; then
-  choice="Assess (deep)"
-else
-  choice="$(dialog \
-    "Janitor will assess reclaimable developer caches.
-
-Never touches Documents or Downloads.
-
-1) Assess
-2) Check what to clean (checkbox on each row)
-3) Sweep now — cleans only what you checked" \
-    "Assess" "Cancel" "Assess" "Assess (deep)")"
-fi
-
-dbg "phase0 choice=$choice"
-
-case "$choice" in
-  Cancel|"") exit 0 ;;
-  "Assess (deep)") DEEP_FLAG="--deep" ;;
-  *) DEEP_FLAG="" ;;
+case "$event" in
+  start) DEEP_FLAG="" ;;
+  start_deep) DEEP_FLAG="--deep" ;;
+  cancel|"")
+    dbg "cancelled at welcome"
+    exit 0
+    ;;
+  *)
+    dbg "unexpected welcome event: $event"
+    exit 0
+    ;;
 esac
 
-# Overlay first — immediately after Assess / Assess (deep)
-sweep_anim_start "Assessing"
-
-# --- Phase 1: assess ---
+# --- Assess ---
+hud_cmd "phase assessing"
+assess_cap="$(mktemp "${TMPDIR:-/tmp}/janitor-assess.XXXXXX")"
 dbg "assess begin deep_flag=${DEEP_FLAG:-<none>}"
 # shellcheck disable=SC2086
-assess_out="$("$JANITOR_BIN" clean --dry-run $DEEP_FLAG 2>&1)" || true
-sweep_anim_stop
+stream_to_hud "$assess_cap" "$JANITOR_BIN" clean --dry-run $DEEP_FLAG || true
 dbg "assess done"
 assess_log="$("$JANITOR_BIN" log --path 2>/dev/null || true)"
-freed_line="$(printf '%s\n' "$assess_out" | grep -E '^Freed \(measured\):' | tail -1 || true)"
+freed_line="$(grep -E '^Freed \(measured\):' "$assess_cap" 2>/dev/null | tail -1 || true)"
 [[ -z "$freed_line" ]] && freed_line="Freed (measured): unknown"
 dbg "assess freed_line=$freed_line log=$assess_log"
 
-# --- Phase 1b: checkboxes ---
-selected="$(choose_tasks)"
-dbg "selected=$selected"
-case "$selected" in
-  CANCEL)
+# --- Choose ---
+item_count="$(hud_send_choose_items)"
+dbg "choose items=$item_count"
+
+if [[ "$item_count" -eq 0 ]]; then
+  hud_cmd "phase done"
+  hud_cmd "done_line Nothing to sweep right now."
+  hud_cmd "done_line "
+  hud_cmd "done_line $freed_line"
+  hud_cmd "done_line "
+  hud_cmd "done_line Full log:"
+  hud_cmd "done_line ${assess_log:-none}"
+  hud_cmd "done_end"
+  event="$(hud_next_event)"
+  dbg "empty-done event=$event"
+  exit 0
+fi
+
+event="$(hud_next_event)"
+dbg "choose event=$event"
+case "$event" in
+  cancel|"")
     notify "Janitor" "Cleanup cancelled — nothing deleted."
     exit 0
     ;;
-  EMPTY)
-    none_log="${assess_log:-none}"
-    alert "🧹 Nothing to sweep right now.
-
-${freed_line}
-
-Log:
-${none_log}"
+  sweep\ *)
+    selected="${event#sweep }"
+    ;;
+  *)
+    dbg "unexpected choose event: $event"
     exit 0
     ;;
 esac
 
-# Checkbox OK is the confirm — no second “Proceed?” dialog.
-# Overlay starts immediately, then clean runs.
-sweep_anim_start "Sweeping"
+[[ -z "$selected" ]] && exit 0
+dbg "selected=$selected"
+
+# --- Sweep ---
+hud_cmd "phase sweeping"
+clean_cap="$(mktemp "${TMPDIR:-/tmp}/janitor-clean.XXXXXX")"
 dbg "clean begin only=$selected"
 # shellcheck disable=SC2086
-clean_out="$("$JANITOR_BIN" clean $DEEP_FLAG --only "$selected" 2>&1)" || true
-sweep_anim_stop
+stream_to_hud "$clean_cap" "$JANITOR_BIN" clean $DEEP_FLAG --only "$selected" || true
 dbg "clean done"
 clean_log="$("$JANITOR_BIN" log --path 2>/dev/null || true)"
-result_line="$(printf '%s\n' "$clean_out" | grep -E '^Freed \(measured\):' | tail -1 || true)"
+result_line="$(grep -E '^Freed \(measured\):' "$clean_cap" 2>/dev/null | tail -1 || true)"
 [[ -z "$result_line" ]] && result_line="Cleanup finished."
-none_log="${clean_log:-none}"
-log_summary="$(log_task_summary "$clean_log")"
+log_summary="$(log_task_summary "${clean_log:-/dev/null}")"
 
-alert "🧹 Hooray! Cleanup complete.
-
-${result_line}
-
-Swept:
-${log_summary}
-
-Full log:
-${none_log}"
+# --- Done ---
+hud_cmd "phase done"
+hud_cmd "done_line $result_line"
+hud_cmd "done_line "
+hud_cmd "done_line Swept:"
+while IFS= read -r row; do
+  [[ -z "$row" ]] && continue
+  hud_cmd "done_line $row"
+done <<<"$log_summary"
+hud_cmd "done_line "
+hud_cmd "done_line Full log:"
+hud_cmd "done_line ${clean_log:-none}"
+hud_cmd "done_end"
 
 notify "🧹 Janitor" "Hooray! ${result_line}"
+
+event="$(hud_next_event)"
+dbg "done event=$event"
 dbg "=== janitor-desktop end ==="
+rm -f "$assess_cap" "$clean_cap" 2>/dev/null || true

@@ -1,12 +1,11 @@
 #!/bin/bash
-# Floating desktop HUD for Janitor assess/clean progress.
-# Prefers compiled Swift overlay (bin/janitor-sweep-hud.appbin); JXA fallback otherwise.
-# Usage: janitor-sweep-hud "Assessing"|"Sweeping" [ready-file]
+# Floating / multi-phase sweeper box for Janitor.
+# Usage:
+#   janitor-sweep-hud --session <dir>     # multi-phase (preferred)
+#   janitor-sweep-hud "Assessing" [ready] # legacy broom-only
 # Stop with SIGTERM/SIGINT (janitor-desktop kills the pid).
 set -euo pipefail
 
-PHASE="${1:-Sweeping}"
-READY_FILE="${2:-}"
 SELF_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 SWIFT_BIN="$SELF_DIR/janitor-sweep-hud.appbin"
 LOG_FILE="${JANITOR_HUD_LOG:-$HOME/Library/Logs/janitor/desktop-debug.log}"
@@ -15,23 +14,47 @@ mkdir -p "$(dirname "$LOG_FILE")" 2>/dev/null || true
 ts() { date '+%Y-%m-%d %H:%M:%S'; }
 hudlog() { printf '%s [hud pid=%s] %s\n' "$(ts)" "$$" "$*" >>"$LOG_FILE" 2>/dev/null || true; }
 
-hudlog "launch phase=$PHASE ready_file=${READY_FILE:-<none>}"
+SESSION=""
+PHASE="Sweeping"
+READY_FILE=""
 
-# Prefer Swift binary — reliable NSPanel at screen-saver level.
+if [[ "${1:-}" == "--session" ]]; then
+  SESSION="${2:-}"
+  if [[ -z "$SESSION" ]]; then
+    echo "usage: janitor-sweep-hud --session <dir>" >&2
+    exit 2
+  fi
+  mkdir -p "$SESSION"
+  : >"$SESSION/cmd"
+  : >"$SESSION/events"
+  rm -f "$SESSION/ready"
+  hudlog "launch session=$SESSION"
+else
+  PHASE="${1:-Sweeping}"
+  READY_FILE="${2:-}"
+  hudlog "launch legacy phase=$PHASE ready_file=${READY_FILE:-<none>}"
+fi
+
+export JANITOR_HUD_LOG="$LOG_FILE"
+
 if [[ -x "$SWIFT_BIN" ]]; then
   hudlog "using Swift HUD: $SWIFT_BIN"
-  export JANITOR_HUD_LOG="$LOG_FILE"
-  if [[ -n "$READY_FILE" ]]; then
+  if [[ -n "$SESSION" ]]; then
+    exec "$SWIFT_BIN" --session "$SESSION"
+  elif [[ -n "$READY_FILE" ]]; then
     exec "$SWIFT_BIN" "$PHASE" "$READY_FILE"
   else
     exec "$SWIFT_BIN" "$PHASE"
   fi
 fi
 
-hudlog "Swift HUD missing — JXA fallback"
+hudlog "Swift HUD missing — cannot run multi-phase session"
+if [[ -n "$SESSION" ]]; then
+  echo "ERROR: Swift HUD binary missing; rebuild with desktop/build-app.sh" >&2
+  exit 1
+fi
 
-# JXA fallback. CRITICAL: setLevel(1000) AFTER setFloatingPanel(true),
-# because floatingPanel resets level back to 3 (invisible under normal apps).
+# Legacy JXA broom-only fallback (no session mode).
 exec osascript -l JavaScript - "$PHASE" "${READY_FILE:-}" "$LOG_FILE" <<'EOF'
 ObjC.import('Cocoa');
 ObjC.import('Foundation');
@@ -96,7 +119,6 @@ win.setBackgroundColor($.NSColor.colorWithCalibratedRedGreenBlueAlpha(0.95, 0.45
 win.setAlphaValue(1.0);
 win.setTitle('Janitor Sweep');
 win.setReleasedWhenClosed(false);
-// MUST come after setFloatingPanel — that call resets level to 3
 win.setLevel(1000);
 
 function makeLabel(text, frame, size) {
@@ -122,33 +144,18 @@ win.contentView.addSubview(hint);
 win.orderFront(null);
 try { win.orderFrontRegardless(); } catch (e1) {}
 app.activateIgnoringOtherApps(true);
-for (var warm = 0; warm < 10; warm++) {
-  $.NSRunLoop.currentRunLoop.runUntilDate($.NSDate.dateWithTimeIntervalSinceNow(0.03));
-}
-
-appendLog(cfg.log, 'panel ordered front frame=' +
-  Math.round(x) + ',' + Math.round(y) + ' ' + w + 'x' + h +
-  ' level=' + win.level + ' visible=' + win.isVisible);
 
 if (cfg.ready && cfg.ready.length > 0) {
   $.NSString.stringWithString('ready\n').writeToFileAtomicallyEncodingError(
     cfg.ready, true, $.NSUTF8StringEncoding, null
   );
-  appendLog(cfg.log, 'ready file written: ' + cfg.ready);
 }
 
 var frames = ['🧹', '🧹 💨', '💨 🧹', '✨ 🧹', '🧹✨'];
 var i = 0;
-var ticks = 0;
 while (true) {
   broom.setStringValue(frames[i]);
   i = (i + 1) % frames.length;
-  ticks++;
-  if (ticks % 8 === 0) {
-    try { win.orderFrontRegardless(); } catch (e3) { win.orderFront(null); }
-    win.setLevel(1000);
-    appendLog(cfg.log, 'heartbeat ticks=' + ticks + ' level=' + win.level);
-  }
   $.NSRunLoop.currentRunLoop.runUntilDate($.NSDate.dateWithTimeIntervalSinceNow(0.4));
 }
 EOF

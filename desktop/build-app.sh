@@ -51,21 +51,23 @@ EOF
 
 cat >"$MACOS_DIR/Janitor" <<EOF
 #!/bin/bash
-# Launcher — two-phase Janitor (assess → confirm → clean)
+# Launcher — sweeper box (welcome → assess → choose → sweep → done)
 exec "$ROOT/bin/janitor-desktop"
 EOF
-chmod +x "$MACOS_DIR/Janitor" "$ROOT/bin/janitor-desktop" "$ROOT/bin/janitor-sweep-hud" "$ROOT/bin/janitor-choose-tasks"
+chmod +x "$MACOS_DIR/Janitor" "$ROOT/bin/janitor-desktop" "$ROOT/bin/janitor-sweep-hud"
+# Legacy checkbox helper kept for reference; happy path uses the Swift sweeper box.
+[[ -f "$ROOT/bin/janitor-choose-tasks" ]] && chmod +x "$ROOT/bin/janitor-choose-tasks"
 
-# Compile floating sweep overlay (Swift). Fail soft if swiftc unavailable.
+# Compile multi-phase sweeper box (Swift). Fail soft if swiftc unavailable.
 HUD_SWIFT="$ROOT/desktop/sweep-hud/main.swift"
 HUD_BIN="$ROOT/bin/janitor-sweep-hud.appbin"
 if [[ -f "$HUD_SWIFT" ]] && command -v swiftc >/dev/null 2>&1; then
-  echo "Compiling sweep HUD…"
+  echo "Compiling sweeper box HUD…"
   swiftc -O -o "$HUD_BIN" "$HUD_SWIFT"
   chmod +x "$HUD_BIN"
   echo "HUD binary: $HUD_BIN"
 else
-  echo "Warning: swiftc/HUD source missing — overlay will use JXA fallback" >&2
+  echo "Warning: swiftc/HUD source missing — desktop UI requires Swift HUD" >&2
 fi
 
 # Bump mtime so Finder/Dock refresh the icon

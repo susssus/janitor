@@ -117,9 +117,65 @@ clean_simctl() {
     log_skip "simctl" "Unavailable simulators" "xcrun not found"
     return 0
   fi
+
+  local id="simctl" label="Unavailable simulators"
   local path="$HOME/Library/Developer/CoreSimulator"
-  run_cmd_task "simctl" "Unavailable simulators" "$path" \
-    xcrun simctl delete unavailable
+  local devices_root="$path/Devices"
+
+  if ! should_run "$id"; then
+    log_skip "$id" "$label" "$(skip_reason_for "$id")" "$path"
+    return 0
+  fi
+
+  # UUIDs listed as unavailable (working sims must stay)
+  local uuids=()
+  local line uuid
+  while IFS= read -r line; do
+    [[ -z "$line" ]] && continue
+    uuid="$(printf '%s' "$line" | grep -oE '[0-9A-Fa-f]{8}-([0-9A-Fa-f]{4}-){3}[0-9A-Fa-f]{12}' | head -1 || true)"
+    [[ -n "$uuid" ]] && uuids+=("$uuid")
+  done < <(xcrun simctl list devices unavailable 2>/dev/null || true)
+
+  if [[ ${#uuids[@]} -eq 0 ]]; then
+    log_skip "$id" "$label" "none unavailable (working sims kept)" "$path"
+    return 0
+  fi
+
+  # Estimate only unavailable device dirs (not whole CoreSimulator)
+  local estimate=0 dkb
+  for uuid in "${uuids[@]}"; do
+    if [[ -d "$devices_root/$uuid" ]]; then
+      dkb="$(du_kb "$devices_root/$uuid")"
+      estimate=$((estimate + dkb))
+    fi
+  done
+
+  local before after freed status ts
+  before="$(du_kb "$path")"
+  ts="$(date -Iseconds 2>/dev/null || date)"
+
+  if [[ "${DRY_RUN:-0}" -eq 1 ]]; then
+    freed="$estimate"
+    log_task dry "$label" "would free ~$(fmt_kb "$freed") (${#uuids[@]} unavailable)" "$path"
+    log_line "  path=$(abs_path "$path") before_kb=$before after_kb=0 freed_kb=$freed status=dry-run unavailable=${#uuids[@]}"
+    history_append "$ts" "$id" "$path" "$before" 0 "$freed" "dry-run"
+    assess_append "$id" "$label" "$freed" "dry-run"
+    TOTAL_FREED_KB=$((TOTAL_FREED_KB + freed))
+    TOTAL_TASKS=$((TOTAL_TASKS + 1))
+    return 0
+  fi
+
+  xcrun simctl delete unavailable >/dev/null 2>&1 || true
+  after="$(du_kb "$path")"
+  freed=$(( before - after ))
+  if [[ "$freed" -lt 0 ]]; then freed=0; fi
+  status="ok"
+  log_task ok "$label" "freed $(fmt_kb "$freed") (${#uuids[@]} unavailable)" "$path"
+  log_line "  path=$(abs_path "$path") before_kb=$before after_kb=$after freed_kb=$freed status=$status"
+  history_append "$ts" "$id" "$path" "$before" "$after" "$freed" "$status"
+  assess_append "$id" "$label" "$freed" "$status"
+  TOTAL_FREED_KB=$((TOTAL_FREED_KB + freed))
+  TOTAL_TASKS=$((TOTAL_TASKS + 1))
 }
 
 clean_old_logs() {

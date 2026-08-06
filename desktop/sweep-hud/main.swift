@@ -223,8 +223,8 @@ final class Hud: NSObject, NSApplicationDelegate {
         welcomeBox = NSView(frame: NSRect(x: 0, y: 0, width: winW, height: winH - 170))
         let blurb = label(
             "Janitor sweeps disk hogs (cache files) — not RAM.\nQuit apps to free memory. Never Documents or Downloads.",
-            frame: NSRect(x: 36, y: 198, width: winW - 72, height: 44),
-            size: 11,
+            frame: NSRect(x: 36, y: 196, width: winW - 72, height: 48),
+            size: 12,
             bold: false
         )
         blurb.textColor = NSColor(calibratedWhite: 0.7, alpha: 1)
@@ -241,10 +241,17 @@ final class Hud: NSObject, NSApplicationDelegate {
             action: #selector(onStartDeep)
         )
         let brave = makeButton(
-            "Brave / Stupid sweep",
+            "Brave / Stupid sweep ?",
             frame: NSRect(x: (winW - 300) / 2, y: 58, width: 300, height: 32),
             action: #selector(onStartBrave)
         )
+        brave.toolTip = """
+        Wider disk sweep: browser & media caches (Chrome, Safari, Steam, Spotify, Discord, Stremio, …).
+
+        Still never touches Documents or Downloads.
+        More buffering / slower first page loads possible after — that’s the tradeoff.
+        Same as: janitor clean --brave
+        """
         let cancel = makeButton(
             "Cancel",
             frame: NSRect(x: (winW - 120) / 2, y: 16, width: 120, height: 28),
@@ -272,7 +279,7 @@ final class Hud: NSObject, NSApplicationDelegate {
         logView = NSTextView(frame: NSRect(x: 0, y: 0, width: winW - 64, height: winH - 210))
         logView.isEditable = false
         logView.isSelectable = true
-        logView.font = NSFont.monospacedSystemFont(ofSize: 11, weight: .regular)
+        logView.font = NSFont.monospacedSystemFont(ofSize: 12, weight: .regular)
         logView.textColor = .white
         logView.backgroundColor = cardBg
         logView.string = ""
@@ -288,8 +295,8 @@ final class Hud: NSObject, NSApplicationDelegate {
 
         choosePrompt = label(
             "Check what to clean. Hogging because + If you swipe. 📖 = educate me further.",
-            frame: NSRect(x: 24, y: winH - 200, width: winW - 48, height: 22),
-            size: 11,
+            frame: NSRect(x: 24, y: winH - 202, width: winW - 48, height: 24),
+            size: 12,
             bold: false
         )
         choosePrompt.alignment = .left
@@ -415,7 +422,7 @@ final class Hud: NSObject, NSApplicationDelegate {
         chooseBooks.removeAll()
         chooseDoc.subviews.forEach { $0.removeFromSuperview() }
 
-        let rowH: CGFloat = 78
+        let rowH: CGFloat = 92
         let listW = winW - 64
         let bookW: CGFloat = 36
         let docH = max(CGFloat(chooseItems.count) * rowH, chooseScroll.frame.height)
@@ -425,18 +432,18 @@ final class Hud: NSObject, NSApplicationDelegate {
             let y = docH - CGFloat(i + 1) * rowH
             let row = NSView(frame: NSRect(x: 0, y: y, width: listW, height: rowH))
 
-            let cb = NSButton(frame: NSRect(x: 8, y: 48, width: listW - bookW - 28, height: 22))
+            let cb = NSButton(frame: NSRect(x: 8, y: 56, width: listW - bookW - 28, height: 24))
             cb.setButtonType(.switch)
             cb.title = item.title
             cb.state = .off
-            cb.font = NSFont.boldSystemFont(ofSize: 12)
+            cb.font = NSFont.boldSystemFont(ofSize: 13)
             if #available(macOS 10.14, *) {
                 cb.contentTintColor = .white
             }
             row.addSubview(cb)
             chooseChecks.append(cb)
 
-            let book = NSButton(frame: NSRect(x: listW - bookW - 8, y: 44, width: bookW, height: 28))
+            let book = NSButton(frame: NSRect(x: listW - bookW - 8, y: 52, width: bookW, height: 28))
             book.bezelStyle = .rounded
             book.title = "📖"
             book.toolTip = "Educate me further"
@@ -447,28 +454,26 @@ final class Hud: NSObject, NSApplicationDelegate {
             row.addSubview(book)
             chooseBooks.append(book)
 
-            var noteY: CGFloat = 28
             if !item.because.isEmpty {
-                let note = NSTextField(frame: NSRect(x: 32, y: noteY, width: listW - bookW - 48, height: 16))
+                let note = NSTextField(frame: NSRect(x: 32, y: 30, width: listW - bookW - 48, height: 20))
                 note.stringValue = item.because
                 note.isBezeled = false
                 note.drawsBackground = false
                 note.isEditable = false
                 note.isSelectable = false
-                note.font = NSFont.systemFont(ofSize: 10)
+                note.font = NSFont.systemFont(ofSize: 12)
                 note.textColor = NSColor.secondaryLabelColor
                 note.lineBreakMode = .byTruncatingTail
                 row.addSubview(note)
-                noteY = 12
             }
             if !item.tradeoff.isEmpty {
-                let note = NSTextField(frame: NSRect(x: 32, y: 4, width: listW - bookW - 48, height: 16))
+                let note = NSTextField(frame: NSRect(x: 32, y: 8, width: listW - bookW - 48, height: 20))
                 note.stringValue = item.tradeoff
                 note.isBezeled = false
                 note.drawsBackground = false
                 note.isEditable = false
                 note.isSelectable = false
-                note.font = NSFont.systemFont(ofSize: 10)
+                note.font = NSFont.systemFont(ofSize: 12)
                 note.textColor = NSColor(calibratedRed: 0.95, green: 0.65, blue: 0.35, alpha: 1)
                 note.lineBreakMode = .byTruncatingTail
                 row.addSubview(note)

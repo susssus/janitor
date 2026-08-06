@@ -8,7 +8,7 @@ JANITOR_HOGS_FILE="$JANITOR_CONFIG_DIR/hogs"
 JANITOR_ASSESS_TSV="${JANITOR_LOG_DIR:-$HOME/Library/Logs/janitor}/last-assess.tsv"
 JANITOR_CATALOG_FILE="${JANITOR_CATALOG_FILE:-$JANITOR_HOME/config/hogs.catalog}"
 
-HOG_EMOJI="🐗"
+HOG_EMOJI="{^oo^}"
 
 # Runtime tables filled by catalog_load (parallel arrays)
 JANITOR_TASK_IDS=()

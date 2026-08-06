@@ -8,7 +8,7 @@ Mac **developer** housekeeper. Reclaims **disk** from known tool caches (`~/.gra
 
 ## Hogs
 
-Each reclaimable target is a **hog** (🐗). List them one row per hog. Choose / done UI shows **Hogging because:** and **If you swipe:** — tap **📖** (or `janitor educate <id>`) for up to three short paragraphs more.
+Each reclaimable target is a **hog** ({^oo^}). List them one row per hog. Choose / done UI shows **Hogging because:** and **If you swipe:** — tap **📖** (or `janitor educate <id>`) for up to three short paragraphs more.
 
 ```bash
 janitor hogs
@@ -65,7 +65,7 @@ Ensure `~/bin` is on your `PATH`, then:
 
 ```bash
 janitor status              # disk + hog sizes (sorted)
-janitor hogs                # 🐗 one row per hog
+janitor hogs                # {^oo^} one row per hog
 janitor discover            # suggestions to adopt
 janitor desktop             # GUI: sweeper box
 janitor tasks               # enable/disable list

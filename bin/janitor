@@ -38,7 +38,7 @@ Usage:
 Commands:
   clean     Run cleanup (always writes a session log)
   desktop   GUI: assess → check tasks (opt-in) → clean
-  status    Disk, RAM, reclaimable hogs (one 🐗 row each)
+  status    Disk, RAM, reclaimable hogs (one {^oo^} row each)
   hogs      List catalog + custom hogs and state
   discover  Suggest off/brave/disabled hogs present on disk
   educate   Longer explanation for one hog, or: janitor educate ram

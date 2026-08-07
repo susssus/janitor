@@ -1,9 +1,10 @@
 #!/bin/bash
-# janitor-desktop — assess → checkbox opt-out → clean
+# janitor-desktop : sweeper box: welcome → assess → choose → sweep → done
 set -euo pipefail
 
 JANITOR_HOME="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 JANITOR_BIN="$JANITOR_HOME/bin/janitor"
+JANITOR_HUD="$JANITOR_HOME/bin/janitor-sweep-hud"
 
 # shellcheck source=../lib/common.sh
 source "$JANITOR_HOME/lib/common.sh"
@@ -12,285 +13,403 @@ source "$JANITOR_HOME/lib/config.sh"
 
 janitor_augment_path
 config_ensure
+janitor_hogs_init
+
+DESKTOP_DEBUG_LOG="${JANITOR_LOG_DIR}/desktop-debug.log"
+HUD_PID=""
+HUD_SESSION=""
+EVENTS_OFFSET=0
 
 osascript_escape() {
-  printf '%s' "$1" | sed 's/\\/\\\\/g; s/"/\\"/g'
+ printf '%s' "$1" | sed 's/\\/\\\\/g; s/"/\\"/g'
 }
 
-dialog() {
-  local message="$1" default_btn="$2"
-  shift 2
-  local buttons=("$@") btn_list="" b
-  for b in "${buttons[@]}"; do
-    [[ -n "$btn_list" ]] && btn_list+=", "
-    btn_list+="\"$(osascript_escape "$b")\""
-  done
-  local msg_esc default_esc
-  msg_esc="$(osascript_escape "$message")"
-  default_esc="$(osascript_escape "$default_btn")"
-  osascript <<EOF
-try
-  set r to button returned of (display dialog "${msg_esc}" with title "Janitor" buttons {${btn_list}} default button "${default_esc}" with icon caution)
-  return r
-on error number -128
-  return "Cancel"
-end try
-EOF
+dbg() {
+ local msg="$*"
+ local line
+ line="$(date '+%Y-%m-%d %H:%M:%S') [pid=$$] $msg"
+ mkdir -p "$JANITOR_LOG_DIR" 2>/dev/null || true
+ printf '%s\n' "$line" >>"$DESKTOP_DEBUG_LOG" 2>/dev/null || true
+ printf '%s\n' "$line" >&2 || true
 }
 
 notify() {
-  local title="$1" body="$2"
-  osascript -e "display notification \"$(osascript_escape "$body")\" with title \"$(osascript_escape "$title")\"" 2>/dev/null || true
-}
-
-SWEEP_ANIM_PID=""
-
-# Cycle 🧹 frames in Notification Center while a blocking clean/assess runs.
-sweep_anim_start() {
-  local phase="${1:-Sweeping}"
-  (
-    local frames=("🧹" "🧹 💨" "💨 🧹" "✨ 🧹")
-    local i=0 n=${#frames[@]}
-    while true; do
-      notify "${frames[$i]} Janitor" "${phase} underway…"
-      i=$(( (i + 1) % n ))
-      sleep 0.75
-    done
-  ) &
-  SWEEP_ANIM_PID=$!
-}
-
-sweep_anim_stop() {
-  [[ -z "${SWEEP_ANIM_PID:-}" ]] && return 0
-  kill "$SWEEP_ANIM_PID" 2>/dev/null || true
-  wait "$SWEEP_ANIM_PID" 2>/dev/null || true
-  SWEEP_ANIM_PID=""
-}
-
-trap 'sweep_anim_stop' EXIT
-
-# Task bullet lines from a session log (• npm cache  freed 1.2G …).
-log_task_summary() {
-  local logfile="$1"
-  local max="${2:-15}"
-  if [[ ! -f "$logfile" ]]; then
-    echo "(no log yet)"
-    return 0
-  fi
-  local lines
-  lines="$(grep -E '^• ' "$logfile" 2>/dev/null | tail -n "$max")"
-  if [[ -z "$lines" ]]; then
-    echo "(no task lines)"
-  else
-    printf '%s\n' "$lines"
-  fi
+ local title="$1" body="$2"
+ osascript -e "display notification \"$(osascript_escape "$body")\" with title \"$(osascript_escape "$title")\"" 2>/dev/null || true
 }
 
 alert() {
-  local message="$1"
-  osascript <<EOF
-display dialog "$(osascript_escape "$message")" with title "🧹 Janitor" buttons {"OK"} default button "OK" with icon note
+ local message="$1"
+ osascript <<EOF
+display dialog "$(osascript_escape "$message")" with title "Janitor" buttons {"OK"} default button "OK" with icon note
 EOF
 }
 
-# Build AppleScript list from last-assess.tsv; user deselects to opt out.
-# Prints selected task ids as comma-separated on stdout; CANCEL / EMPTY on special cases.
-choose_tasks() {
-  local assess="$JANITOR_ASSESS_TSV"
-  if [[ ! -f "$assess" ]]; then
-    echo "EMPTY"
-    return 0
-  fi
+# --- HUD session helpers ---------------------------------------------------
 
-  local items=() defaults=() line id label freed status display
-  while IFS=$'\t' read -r id label freed status; do
-    [[ "$id" == "id" ]] && continue
-    [[ -z "$id" ]] && continue
-    # Only offer tasks that would reclaim something
-    [[ "${freed:-0}" -gt 0 ]] || continue
-    display="${id} — ${label} ($(fmt_kb "$freed"))"
-    items+=("$display")
-    defaults+=("$display")
-  done <"$assess"
-
-  if [[ ${#items[@]} -eq 0 ]]; then
-    echo "EMPTY"
-    return 0
-  fi
-
-  # Write AppleScript list literals
-  local list_lit="" def_lit="" it
-  for it in "${items[@]}"; do
-    [[ -n "$list_lit" ]] && list_lit+=", "
-    list_lit+="\"$(osascript_escape "$it")\""
-  done
-  for it in "${defaults[@]}"; do
-    [[ -n "$def_lit" ]] && def_lit+=", "
-    def_lit+="\"$(osascript_escape "$it")\""
-  done
-
-  local chosen
-  chosen="$(osascript <<EOF
-try
-  set taskList to {${list_lit}}
-  set defaultList to {${def_lit}}
-  set chosen to choose from list taskList with title "Janitor" with prompt "Deselect anything you do NOT want cleaned (all selected = clean all):" default items defaultList with multiple selections allowed
-  if chosen is false then
-    return "CANCEL"
-  end if
-  set text item delimiters of AppleScript to linefeed
-  return chosen as text
-on error number -128
-  return "CANCEL"
-end try
-EOF
-)"
-
-  if [[ "$chosen" == "CANCEL" || -z "$chosen" ]]; then
-    echo "CANCEL"
-    return 0
-  fi
-
-  # Extract ids (text before " — ")
-  local selected_ids=() row
-  while IFS= read -r row; do
-    [[ -z "$row" ]] && continue
-    selected_ids+=("${row%% — *}")
-  done <<<"$chosen"
-
-  if [[ ${#selected_ids[@]} -eq 0 ]]; then
-    echo "EMPTY"
-    return 0
-  fi
-
-  local IFS=,
-  echo "${selected_ids[*]}"
+hud_cmd() {
+ [[ -n "${HUD_SESSION:-}" ]] || return 0
+ # fflush-friendly append
+ printf '%s\n' "$*" >>"$HUD_SESSION/cmd"
 }
 
-# Compare assess ids vs selected → permanently disable deselected if user agrees
-maybe_remember_optouts() {
-  local selected_csv="$1"
-  local assess="$JANITOR_ASSESS_TSV"
-  local deselected=() id label freed status
-  while IFS=$'\t' read -r id label freed status; do
-    [[ "$id" == "id" ]] && continue
-    [[ -z "$id" ]] && continue
-    [[ "${freed:-0}" -gt 0 ]] || continue
-    case ",${selected_csv}," in
-      *",${id},"*) ;;
-      *) deselected+=("$id") ;;
-    esac
-  done <"$assess"
+hud_start() {
+ HUD_SESSION="$(mktemp -d "${TMPDIR:-/tmp}/janitor-hud.XXXXXX")"
+ export JANITOR_HUD_LOG="$DESKTOP_DEBUG_LOG"
+ dbg "HUD session=$HUD_SESSION"
 
-  [[ ${#deselected[@]} -gt 0 ]] || return 0
+ if [[ ! -x "$JANITOR_HUD" ]]; then
+ dbg "HUD missing: $JANITOR_HUD"
+ alert "Janitor sweeper box missing.
 
-  local list
-  list="$(printf '%s, ' "${deselected[@]}")"
-  list="${list%, }"
-  local ans
-  ans="$(dialog \
-    "Remember these opt-outs for next time?
+$JANITOR_HUD
 
-${list}
+Re-run: ./desktop/build-app.sh"
+ exit 1
+ fi
 
-Saved in ~/.config/janitor/disabled" \
-    "Not now" "Not now" "Remember")"
-  if [[ "$ans" == "Remember" ]]; then
-    local d
-    for d in "${deselected[@]}"; do
-      task_disable "$d" >/dev/null
-    done
-    notify "Janitor" "Saved ${#deselected[@]} opt-out(s)"
-  fi
+ "$JANITOR_HUD" --session "$HUD_SESSION" >>"$DESKTOP_DEBUG_LOG" 2>&1 &
+ HUD_PID=$!
+ dbg "HUD started pid=$HUD_PID"
+
+ local i=0
+ while [[ $i -lt 100 ]]; do
+ [[ -f "$HUD_SESSION/ready" ]] && break
+ kill -0 "$HUD_PID" 2>/dev/null || break
+ sleep 0.05
+ i=$((i + 1))
+ done
+ if [[ -f "$HUD_SESSION/ready" ]]; then
+ dbg "HUD ready"
+ else
+ dbg "HUD failed to become ready"
+ alert "Janitor sweeper box failed to open.
+
+See $DESKTOP_DEBUG_LOG"
+ exit 1
+ fi
+ EVENTS_OFFSET=0
 }
 
-# --- Phase 0 ---
-if [[ "${JANITOR_DESKTOP_DEEP:-0}" == "1" ]]; then
-  choice="Assess (deep)"
-else
-  choice="$(dialog \
-    "Janitor will assess reclaimable developer caches.
+hud_stop() {
+ local pid="${HUD_PID:-}"
+ HUD_PID=""
+ if [[ -n "$pid" ]]; then
+ dbg "HUD stop pid=$pid"
+ hud_cmd "quit" 2>/dev/null || true
+ sleep 0.15
+ pkill -P "$pid" 2>/dev/null || true
+ kill "$pid" 2>/dev/null || true
+ wait "$pid" 2>/dev/null || true
+ fi
+ pkill -f 'janitor-sweep-hud' 2>/dev/null || true
+ if [[ -n "${HUD_SESSION:-}" ]]; then
+ rm -rf "$HUD_SESSION" 2>/dev/null || true
+ HUD_SESSION=""
+ fi
+}
 
-Never touches Documents or Downloads.
+trap 'dbg "EXIT trap"; hud_stop' EXIT
 
-1) Assess
-2) Uncheck what to keep
-3) Clean only what you left checked" \
-    "Assess" "Cancel" "Assess" "Assess (deep)")"
+# Wait for next HUD event (start / start_deep / cancel / sweep … / ok).
+# IMPORTANT: must not run under command substitution : EVENT_QUEUE / EVENTS_OFFSET
+# live in this shell. Callers use: hud_next_event; event="$HUD_EVENT"
+EVENT_QUEUE=()
+HUD_EVENT=""
+
+hud_poll_events() {
+ local events="$HUD_SESSION/events"
+ [[ -f "$events" ]] || return 0
+ local size
+ size="$(wc -c <"$events" | tr -d ' ')"
+ if [[ "$size" -le "$EVENTS_OFFSET" ]]; then
+ return 0
+ fi
+ local chunk
+ chunk="$(dd if="$events" bs=1 skip="$EVENTS_OFFSET" 2>/dev/null || true)"
+ EVENTS_OFFSET=$size
+ local line
+ while IFS= read -r line || [[ -n "$line" ]]; do
+ [[ -z "$line" ]] && continue
+ [[ "$line" == "ready" ]] && continue
+ EVENT_QUEUE+=("$line")
+ done <<<"$chunk"
+}
+
+hud_next_event() {
+ HUD_EVENT=""
+ while true; do
+ if [[ ${#EVENT_QUEUE[@]} -gt 0 ]]; then
+ HUD_EVENT="${EVENT_QUEUE[0]}"
+ EVENT_QUEUE=("${EVENT_QUEUE[@]:1}")
+ return 0
+ fi
+ if ! kill -0 "$HUD_PID" 2>/dev/null; then
+ HUD_EVENT="cancel"
+ return 0
+ fi
+ hud_poll_events
+ if [[ ${#EVENT_QUEUE[@]} -gt 0 ]]; then
+ continue
+ fi
+ sleep 0.05
+ done
+}
+
+# Drop any stale events left over from a previous phase (e.g. duplicate clicks).
+hud_drain_events() {
+ hud_poll_events
+ EVENT_QUEUE=()
+}
+
+# Stream janitor output into HUD log lines; also tee to a capture file.
+stream_to_hud() {
+ local capture="$1"
+ shift
+ : >"$capture"
+ # Line-buffer if available
+ if command -v stdbuf >/dev/null 2>&1; then
+ stdbuf -oL -eL "$@" 2>&1 | tee -a "$capture" | while IFS= read -r line || [[ -n "$line" ]]; do
+ hud_cmd "log $line"
+ done
+ else
+ "$@" 2>&1 | tee -a "$capture" | while IFS= read -r line || [[ -n "$line" ]]; do
+ hud_cmd "log $line"
+ done
+ fi
+ return "${PIPESTATUS[0]:-0}"
+}
+
+log_task_summary() {
+ local logfile="$1"
+ local max="${2:-20}"
+ if [[ ! -f "$logfile" ]]; then
+ echo "(no log yet)"
+ return 0
+ fi
+ local lines
+ # Task rows (kaomoji + status) and the full-path lines under them
+ lines="$(grep -E '\[(ok|dry run|skip|refuse|done)\]|^ /' "$logfile" 2>/dev/null | tail -n "$max")"
+ if [[ -z "$lines" ]]; then
+ echo "(no task lines)"
+ else
+ printf '%s\n' "$lines"
+ fi
+}
+
+# Build choose items from assess TSV into HUD.
+# item id \t title \t because \t tradeoff \t educate(¶=newline)
+hud_send_choose_items() {
+ local assess="$JANITOR_ASSESS_TSV"
+ local count=0 id label freed status title because swipe edu edu_wire
+ hud_cmd "phase choose"
+ if [[ ! -f "$assess" ]]; then
+ hud_cmd "items_end"
+ echo 0
+ return 0
+ fi
+ while IFS=$'\t' read -r id label freed status; do
+ [[ "$id" == "id" ]] && continue
+ [[ -z "$id" ]] && continue
+ [[ "${freed:-0}" -gt 0 ]] || continue
+ title="${id}: ${label} ($(fmt_kb "$freed"))"
+ because="$(task_hogging_because "$id")"
+ swipe="$(task_if_you_swipe "$id")"
+ edu="$(task_educate "$id")"
+ edu_wire="${edu//$'\n'/¶}"
+ hud_cmd "item ${id}"$'\t'"${title}"$'\t'"${because}"$'\t'"${swipe}"$'\t'"${edu_wire}"
+ count=$((count + 1))
+ done <"$assess"
+ hud_cmd "items_end"
+ echo "$count"
+}
+
+# Educational done summary for selected ids (uses post-clean assess TSV)
+hud_send_swept_edu() {
+ local selected="$1"
+ local id label because swipe path freed_kb size
+ local IFS=','
+ # shellcheck disable=SC2086
+ set -- $selected
+ for id in "$@"; do
+ [[ -z "$id" ]] && continue
+ label="$(task_label "$id")"
+ because="$(task_hogging_because "$id")"
+ swipe="$(task_if_you_swipe "$id")"
+ path="$(hog_measure_path "$id" 2>/dev/null || true)"
+ freed_kb=0
+ if [[ -f "$JANITOR_ASSESS_TSV" ]]; then
+ freed_kb="$(awk -F'\t' -v id="$id" '$1==id {print $3; exit}' "$JANITOR_ASSESS_TSV" 2>/dev/null || true)"
+ freed_kb="${freed_kb:-0}"
+ fi
+ size="$(fmt_kb "${freed_kb:-0}")"
+ hud_cmd "done_line ${HOG_EMOJI} ${label}: freed ${size}"
+ [[ -n "$because" ]] && hud_cmd "done_line ${because}"
+ [[ -n "$swipe" ]] && hud_cmd "done_line ${swipe}"
+ [[ -n "$path" ]] && hud_cmd "done_line ${path}"
+ hud_cmd "done_line "
+ done
+}
+
+# --- Main flow -------------------------------------------------------------
+
+dbg "=== janitor-desktop start ==="
+dbg "JANITOR_HOME=$JANITOR_HOME"
+dbg "HUD=$JANITOR_HUD executable=$([[ -x $JANITOR_HUD ]] && echo yes || echo no)"
+
+hud_start
+
+# Welcome is shown by HUD on launch. Wait for start / start_deep / start_brave / start_stupid / cancel.
+hud_next_event
+event="$HUD_EVENT"
+dbg "welcome event=$event"
+
+DEEP_FLAG=""
+BRAVE_FLAG=""
+STUPID_FLAG=""
+case "$event" in
+ start) DEEP_FLAG=""; BRAVE_FLAG=""; STUPID_FLAG="" ;;
+ start_deep) DEEP_FLAG="--deep"; BRAVE_FLAG=""; STUPID_FLAG="" ;;
+ start_brave) DEEP_FLAG=""; BRAVE_FLAG="--brave"; STUPID_FLAG="" ;;
+ start_stupid) DEEP_FLAG=""; BRAVE_FLAG=""; STUPID_FLAG="--stupid" ;;
+ cancel|"")
+ dbg "cancelled at welcome"
+ exit 0
+ ;;
+ *)
+ dbg "unexpected welcome event: $event"
+ exit 0
+ ;;
+esac
+
+# CLI overrides from janitor desktop --brave / --deep / --stupid
+if [[ "${JANITOR_DESKTOP_DEEP:-0}" == "1" || "${JANITOR_DESKTOP_DEEP:-}" == "1" ]]; then
+ DEEP_FLAG="--deep"
+fi
+if [[ -n "${JANITOR_DESKTOP_BRAVE:-}" ]]; then
+ BRAVE_FLAG="--brave"
+fi
+if [[ -n "${JANITOR_DESKTOP_STUPID:-}" ]]; then
+ STUPID_FLAG="--stupid"
+ BRAVE_FLAG=""
 fi
 
-case "$choice" in
-  Cancel|"") exit 0 ;;
-  "Assess (deep)") DEEP_FLAG=(--deep) ;;
-  *) DEEP_FLAG=() ;;
-esac
-
-sweep_anim_start "Assessing"
-
-# --- Phase 1: assess ---
-assess_out="$("$JANITOR_BIN" clean --dry-run "${DEEP_FLAG[@]}" 2>&1)" || true
-sweep_anim_stop
+# --- Assess ---
+hud_drain_events
+hud_cmd "phase assessing"
+assess_cap="$(mktemp "${TMPDIR:-/tmp}/janitor-assess.XXXXXX")"
+dbg "assess begin deep_flag=${DEEP_FLAG:-<none>} brave_flag=${BRAVE_FLAG:-<none>} stupid_flag=${STUPID_FLAG:-<none>}"
+# shellcheck disable=SC2086
+stream_to_hud "$assess_cap" "$JANITOR_BIN" clean --dry-run $DEEP_FLAG $BRAVE_FLAG $STUPID_FLAG || true
+dbg "assess done"
 assess_log="$("$JANITOR_BIN" log --path 2>/dev/null || true)"
-freed_line="$(printf '%s\n' "$assess_out" | grep -E '^Freed \(measured\):' | tail -1 || true)"
+freed_line="$(grep -E '^Freed \(measured\):' "$assess_cap" 2>/dev/null | tail -1 || true)"
 [[ -z "$freed_line" ]] && freed_line="Freed (measured): unknown"
+dbg "assess freed_line=$freed_line log=$assess_log"
 
-# --- Phase 1b: checkboxes ---
-selected="$(choose_tasks)"
-case "$selected" in
-  CANCEL)
-    notify "Janitor" "Cleanup cancelled — nothing deleted."
-    exit 0
-    ;;
-  EMPTY)
-    none_log="${assess_log:-none}"
-    alert "🧹 Nothing to sweep right now.
+# --- Choose ---
+hud_drain_events
+item_count="$(hud_send_choose_items)"
+dbg "choose items=$item_count"
 
-${freed_line}
+if [[ "$item_count" -eq 0 ]]; then
+ hud_cmd "phase done"
+ assess_kb="$(assess_total_freed_kb)"
+ assess_size="$(fmt_kb "$assess_kb")"
+ hud_cmd "subtitle Nothing to reclaim right now"
+ hud_cmd "done_line Disk freed: ${assess_size}"
+ hud_cmd "done_line (no hogs had reclaimable space this round)"
+ hud_cmd "done_line "
+ hud_cmd "done_line Full log:"
+ hud_cmd "done_line ${assess_log:-none}"
+ hud_cmd "done_end"
+ hud_next_event
+ dbg "empty-done event=$HUD_EVENT"
+ exit 0
+fi
 
-Log:
-${none_log}"
-    exit 0
-    ;;
-esac
+# Wait until user picks tasks (or cancels). Ignore stale welcome clicks.
+while true; do
+ hud_next_event
+ event="$HUD_EVENT"
+ dbg "choose event=$event"
+ case "$event" in
+ start|start_deep|start_brave|start_stupid)
+ dbg "ignoring stale welcome event during choose"
+ continue
+ ;;
+ cancel|"")
+ notify "Janitor" "Cleanup cancelled. Nothing deleted."
+ exit 0
+ ;;
+ sweep\ *)
+ selected="${event#sweep }"
+ break
+ ;;
+ *)
+ dbg "unexpected choose event: $event"
+ exit 0
+ ;;
+ esac
+done
 
-maybe_remember_optouts "$selected"
+[[ -z "$selected" ]] && exit 0
+dbg "selected=$selected"
 
-confirm="$(dialog \
-  "Ready to clean selected tasks:
-
-${selected}
-
-${freed_line} (full assess; only selected will run)
-
-Proceed?" \
-  "Cancel" "Cancel" "Clean now")"
-
-case "$confirm" in
-  "Clean now") ;;
-  *)
-    notify "Janitor" "Cleanup cancelled — nothing deleted."
-    exit 0
-    ;;
-esac
-
-# --- Phase 2 ---
-sweep_anim_start "Sweeping"
-clean_out="$("$JANITOR_BIN" clean "${DEEP_FLAG[@]}" --only "$selected" 2>&1)" || true
-sweep_anim_stop
+# --- Sweep ---
+hud_drain_events
+hud_cmd "phase sweeping"
+clean_cap="$(mktemp "${TMPDIR:-/tmp}/janitor-clean.XXXXXX")"
+dbg "clean begin only=$selected"
+# shellcheck disable=SC2086
+stream_to_hud "$clean_cap" "$JANITOR_BIN" clean $DEEP_FLAG $BRAVE_FLAG $STUPID_FLAG --only "$selected" || true
+dbg "clean done"
 clean_log="$("$JANITOR_BIN" log --path 2>/dev/null || true)"
-result_line="$(printf '%s\n' "$clean_out" | grep -E '^Freed \(measured\):' | tail -1 || true)"
-[[ -z "$result_line" ]] && result_line="Cleanup finished."
-none_log="${clean_log:-none}"
-log_summary="$(log_task_summary "$clean_log")"
 
-alert "🧹 Hooray! Cleanup complete.
+# Ceremonial disk headline from post-clean assess TSV (reliable KB totals)
+disk_kb="$(assess_total_freed_kb)"
+disk_tasks="$(assess_task_count)"
+disk_size="$(fmt_kb "${disk_kb:-0}")"
+result_line="Disk freed: ${disk_size}"
+subtitle_line="Disk freed: ${disk_size}"
+if [[ "${disk_tasks:-0}" -gt 0 ]]; then
+ subtitle_line="Disk freed: ${disk_size} across ${disk_tasks} hogs"
+fi
+dbg "done disk_kb=$disk_kb disk_size=$disk_size tasks=$disk_tasks"
 
-${result_line}
+# --- Done ---
+hud_drain_events
+hud_cmd "phase done"
+hud_cmd "subtitle ${subtitle_line}"
+hud_cmd "done_line ════════════════════════════════════"
+hud_cmd "done_line DISK FREED: ${disk_size}"
+hud_cmd "done_line (${disk_tasks} hogs swept · measured reclaim)"
+hud_cmd "done_line ════════════════════════════════════"
+hud_cmd "done_line "
+if [[ "${disk_kb:-0}" -gt 0 ]]; then
+ hud_cmd "done_line Benefit of the sweep: reclaimable caches left the disk."
+else
+ hud_cmd "done_line Measured reclaim was 0K. The hog ran, but brew/npm/etc had nothing unused to drop right now."
+ hud_cmd "done_line (A big cache folder is not always the same as reclaimable space.)"
+fi
+hud_cmd "done_line "
+hud_cmd "done_line Disk hogs vs RAM hogs:"
+hud_cmd "done_line Disk hogs = files on your SSD (caches). Janitor sweeps those → frees gigabytes."
+hud_cmd "done_line RAM hogs = apps holding memory now. Quit apps / restart to free RAM."
+hud_cmd "done_line Deleting caches does not empty RAM. The RAM block in the log is a snapshot only."
+hud_cmd "done_line "
+hud_cmd "done_line Swept:"
+hud_cmd "done_line "
+hud_send_swept_edu "$selected"
+hud_cmd "done_line Still sacrosanct: Documents & Downloads (untouched)."
+hud_cmd "done_line "
+hud_cmd "done_line Full log:"
+hud_cmd "done_line ${clean_log:-none}"
+hud_cmd "done_end"
 
-Swept:
-${log_summary}
+notify "Janitor" "Hooray! ${result_line}"
 
-Full log:
-${none_log}"
-
-notify "🧹 Janitor" "Hooray! ${result_line}"
+hud_next_event
+dbg "done event=$HUD_EVENT"
+dbg "=== janitor-desktop end ==="
+rm -f "$assess_cap" "$clean_cap" 2>/dev/null || true

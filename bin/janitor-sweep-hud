@@ -1,0 +1,161 @@
+#!/bin/bash
+# Floating / multi-phase sweeper box for Janitor.
+# Usage:
+#   janitor-sweep-hud --session <dir>     # multi-phase (preferred)
+#   janitor-sweep-hud "Assessing" [ready] # legacy broom-only
+# Stop with SIGTERM/SIGINT (janitor-desktop kills the pid).
+set -euo pipefail
+
+SELF_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+SWIFT_BIN="$SELF_DIR/janitor-sweep-hud.appbin"
+LOG_FILE="${JANITOR_HUD_LOG:-$HOME/Library/Logs/janitor/desktop-debug.log}"
+
+mkdir -p "$(dirname "$LOG_FILE")" 2>/dev/null || true
+ts() { date '+%Y-%m-%d %H:%M:%S'; }
+hudlog() { printf '%s [hud pid=%s] %s\n' "$(ts)" "$$" "$*" >>"$LOG_FILE" 2>/dev/null || true; }
+
+SESSION=""
+PHASE="Sweeping"
+READY_FILE=""
+
+if [[ "${1:-}" == "--session" ]]; then
+  SESSION="${2:-}"
+  if [[ -z "$SESSION" ]]; then
+    echo "usage: janitor-sweep-hud --session <dir>" >&2
+    exit 2
+  fi
+  mkdir -p "$SESSION"
+  : >"$SESSION/cmd"
+  : >"$SESSION/events"
+  rm -f "$SESSION/ready"
+  hudlog "launch session=$SESSION"
+else
+  PHASE="${1:-Sweeping}"
+  READY_FILE="${2:-}"
+  hudlog "launch legacy phase=$PHASE ready_file=${READY_FILE:-<none>}"
+fi
+
+export JANITOR_HUD_LOG="$LOG_FILE"
+
+if [[ -x "$SWIFT_BIN" ]]; then
+  hudlog "using Swift HUD: $SWIFT_BIN"
+  if [[ -n "$SESSION" ]]; then
+    exec "$SWIFT_BIN" --session "$SESSION"
+  elif [[ -n "$READY_FILE" ]]; then
+    exec "$SWIFT_BIN" "$PHASE" "$READY_FILE"
+  else
+    exec "$SWIFT_BIN" "$PHASE"
+  fi
+fi
+
+hudlog "Swift HUD missing: cannot run multi-phase session"
+if [[ -n "$SESSION" ]]; then
+  echo "ERROR: Swift HUD binary missing; rebuild with desktop/build-app.sh" >&2
+  exit 1
+fi
+
+# Legacy JXA broom-only fallback (no session mode).
+exec osascript -l JavaScript - "$PHASE" "${READY_FILE:-}" "$LOG_FILE" <<'EOF'
+ObjC.import('Cocoa');
+ObjC.import('Foundation');
+
+function args() {
+  var a = $.NSProcessInfo.processInfo.arguments;
+  return {
+    phase: a.objectAtIndex(4).js,
+    ready: a.count > 5 ? a.objectAtIndex(5).js : '',
+    log: a.count > 6 ? a.objectAtIndex(6).js : ''
+  };
+}
+
+function appendLog(path, msg) {
+  if (!path) return;
+  var line = $.NSString.stringWithString(
+    (new Date()).toISOString() + ' [hud-jxa] ' + msg + '\n'
+  );
+  var data = line.dataUsingEncoding($.NSUTF8StringEncoding);
+  var fh = $.NSFileHandle.fileHandleForWritingAtPath(path);
+  if (fh) {
+    fh.seekToEndOfFile;
+    fh.writeData(data);
+    fh.closeFile;
+  } else {
+    line.writeToFileAtomicallyEncodingError(path, true, $.NSUTF8StringEncoding, null);
+  }
+}
+
+var cfg = args();
+appendLog(cfg.log, 'jxa start phase=' + cfg.phase);
+
+var app = $.NSApplication.sharedApplication;
+app.setActivationPolicy($.NSApplicationActivationPolicyAccessory);
+
+var screen = $.NSScreen.mainScreen.visibleFrame;
+var w = 340;
+var h = 240;
+var x = screen.origin.x + (screen.size.width - w) / 2;
+var y = screen.origin.y + (screen.size.height - h) / 2;
+
+var style = $.NSWindowStyleMaskBorderless | $.NSWindowStyleMaskNonactivatingPanel;
+var win = $.NSPanel.alloc.initWithContentRectStyleMaskBackingDefer(
+  $.NSMakeRect(x, y, w, h),
+  style,
+  $.NSBackingStoreBuffered,
+  false
+);
+win.setFloatingPanel(true);
+win.setBecomesKeyOnlyIfNeeded(true);
+win.setWorksWhenModal(true);
+win.setHidesOnDeactivate(false);
+win.setOpaque(true);
+win.setHasShadow(true);
+win.setIgnoresMouseEvents(true);
+win.setCollectionBehavior(
+  $.NSWindowCollectionBehaviorCanJoinAllSpaces |
+  $.NSWindowCollectionBehaviorFullScreenAuxiliary |
+  $.NSWindowCollectionBehaviorStationary
+);
+win.setBackgroundColor($.NSColor.colorWithCalibratedRedGreenBlueAlpha(0.95, 0.45, 0.08, 1.0));
+win.setAlphaValue(1.0);
+win.setTitle('Janitor Sweep');
+win.setReleasedWhenClosed(false);
+win.setLevel(1000);
+
+function makeLabel(text, frame, size) {
+  var t = $.NSTextField.alloc.initWithFrame(frame);
+  t.setStringValue(text);
+  t.setBezeled(false);
+  t.setDrawsBackground(false);
+  t.setEditable(false);
+  t.setSelectable(false);
+  t.setAlignment($.NSTextAlignmentCenter);
+  t.setFont($.NSFont.boldSystemFontOfSize(size));
+  t.setTextColor($.NSColor.whiteColor);
+  return t;
+}
+
+var broom = makeLabel('(*^▽^*)', $.NSMakeRect(0, 90, w, 110), 28);
+var sub = makeLabel(cfg.phase + '…', $.NSMakeRect(12, 42, w - 24, 32), 22);
+var hint = makeLabel('Janitor', $.NSMakeRect(12, 14, w - 24, 24), 14);
+win.contentView.addSubview(broom);
+win.contentView.addSubview(sub);
+win.contentView.addSubview(hint);
+
+win.orderFront(null);
+try { win.orderFrontRegardless(); } catch (e1) {}
+app.activateIgnoringOtherApps(true);
+
+if (cfg.ready && cfg.ready.length > 0) {
+  $.NSString.stringWithString('ready\n').writeToFileAtomicallyEncodingError(
+    cfg.ready, true, $.NSUTF8StringEncoding, null
+  );
+}
+
+var frames = ['(*^▽^*)', '(｀・ω・´)', '٩(ˊᗜˋ*)و', '(ノ°ο°)ノ', '(＾▽＾)'];
+var i = 0;
+while (true) {
+  broom.setStringValue(frames[i]);
+  i = (i + 1) % frames.length;
+  $.NSRunLoop.currentRunLoop.runUntilDate($.NSDate.dateWithTimeIntervalSinceNow(0.4));
+}
+EOF

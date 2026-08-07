@@ -1,0 +1,223 @@
+#!/bin/bash
+# Checkbox picker for Janitor desktop: real per-row NSButton switches.
+# Usage: janitor-choose-tasks <items-file>
+#   items-file TSV rows: id<TAB>title<TAB>blurb
+# Stdout: selected ids (newline-separated), or CANCEL / __EMPTY__
+set -euo pipefail
+
+ITEMS_FILE="${1:-}"
+if [[ -z "$ITEMS_FILE" || ! -f "$ITEMS_FILE" ]]; then
+  echo "CANCEL"
+  exit 0
+fi
+
+# Pass absolute path so JXA can read it
+ITEMS_FILE="$(cd "$(dirname "$ITEMS_FILE")" && pwd)/$(basename "$ITEMS_FILE")"
+
+osascript -l JavaScript - "$ITEMS_FILE" <<'EOF'
+ObjC.import('Cocoa');
+ObjC.import('Foundation');
+
+var itemsPath = $.NSProcessInfo.processInfo.arguments.objectAtIndex(4).js;
+var raw = $.NSString.stringWithContentsOfFileEncodingError(
+  itemsPath,
+  $.NSUTF8StringEncoding,
+  null
+);
+if (!raw) {
+  'CANCEL';
+} else {
+  var lines = raw.js.split('\n').filter(function (s) { return s.length > 0; });
+  var items = [];
+  for (var li = 0; li < lines.length; li++) {
+    var parts = lines[li].split('\t');
+    if (parts.length < 2 || !parts[0]) continue;
+    items.push({
+      id: parts[0],
+      title: parts[1] || parts[0],
+      blurb: parts.length > 2 ? parts.slice(2).join('\t') : ''
+    });
+  }
+
+  if (items.length === 0) {
+    'CANCEL';
+  } else {
+    var app = $.NSApplication.sharedApplication;
+    app.setActivationPolicy($.NSApplicationActivationPolicyAccessory);
+
+    var rowH = 52; // title + blurb
+    var pad = 16;
+    var listW = 560;
+    var visibleRows = Math.min(items.length, 8);
+    var scrollH = visibleRows * rowH + 8;
+    var winW = listW + pad * 2;
+    var winH = 56 + scrollH + 56 + 52;
+
+    var screen = $.NSScreen.mainScreen.visibleFrame;
+    var winX = screen.origin.x + (screen.size.width - winW) / 2;
+    var winY = screen.origin.y + (screen.size.height - winH) / 2;
+
+    var win = $.NSWindow.alloc.initWithContentRectStyleMaskBackingDefer(
+      $.NSMakeRect(winX, winY, winW, winH),
+      $.NSWindowStyleMaskTitled | $.NSWindowStyleMaskClosable,
+      $.NSBackingStoreBuffered,
+      false
+    );
+    win.setTitle('Janitor');
+    win.setLevel($.NSModalPanelWindowLevel);
+    win.setReleasedWhenClosed(false);
+
+    var prompt = $.NSTextField.alloc.initWithFrame($.NSMakeRect(pad, winH - 40, listW, 22));
+    prompt.setStringValue('Check what you want cleaned (none checked). Each row explains what it removes:');
+    prompt.setBezeled(false);
+    prompt.setDrawsBackground(false);
+    prompt.setEditable(false);
+    prompt.setSelectable(false);
+    prompt.setFont($.NSFont.systemFontOfSize(13));
+    win.contentView.addSubview(prompt);
+
+    var docH = items.length * rowH;
+    var docView = $.NSView.alloc.initWithFrame($.NSMakeRect(0, 0, listW - 16, Math.max(docH, scrollH)));
+
+    var checks = [];
+    for (var i = 0; i < items.length; i++) {
+      var y = docH - (i + 1) * rowH;
+      var row = $.NSView.alloc.initWithFrame($.NSMakeRect(0, y, listW - 16, rowH));
+
+      var cb = $.NSButton.alloc.initWithFrame($.NSMakeRect(8, 18, listW - 40, 24));
+      cb.setButtonType($.NSButtonTypeSwitch);
+      cb.setTitle(items[i].title);
+      cb.setState($.NSControlStateValueOff);
+      cb.setFont($.NSFont.boldSystemFontOfSize(12));
+      row.addSubview(cb);
+      checks.push(cb);
+
+      if (items[i].blurb) {
+        var note = $.NSTextField.alloc.initWithFrame($.NSMakeRect(32, 2, listW - 56, 18));
+        note.setStringValue(items[i].blurb);
+        note.setBezeled(false);
+        note.setDrawsBackground(false);
+        note.setEditable(false);
+        note.setSelectable(false);
+        note.setFont($.NSFont.systemFontOfSize(11));
+        note.setTextColor($.NSColor.secondaryLabelColor);
+        note.setLineBreakMode($.NSLineBreakByTruncatingTail);
+        row.addSubview(note);
+      }
+
+      docView.addSubview(row);
+    }
+
+    var scroll = $.NSScrollView.alloc.initWithFrame($.NSMakeRect(pad, 56 + 44, listW, scrollH));
+    scroll.setHasVerticalScroller(true);
+    scroll.setHasHorizontalScroller(false);
+    scroll.setBorderType($.NSBezelBorder);
+    scroll.setDocumentView(docView);
+    if (docH < scrollH) {
+      docView.setFrame($.NSMakeRect(0, scrollH - docH, listW - 16, docH));
+    }
+    win.contentView.addSubview(scroll);
+
+    var checkAllBtn = $.NSButton.alloc.initWithFrame($.NSMakeRect(pad, 56, 110, 32));
+    checkAllBtn.setTitle('Check all');
+    checkAllBtn.setBezelStyle($.NSBezelStyleRounded);
+
+    var uncheckAllBtn = $.NSButton.alloc.initWithFrame($.NSMakeRect(pad + 118, 56, 120, 32));
+    uncheckAllBtn.setTitle('Uncheck all');
+    uncheckAllBtn.setBezelStyle($.NSBezelStyleRounded);
+
+    var cancelBtn = $.NSButton.alloc.initWithFrame($.NSMakeRect(winW - pad - 200, 12, 90, 32));
+    cancelBtn.setTitle('Cancel');
+    cancelBtn.setBezelStyle($.NSBezelStyleRounded);
+    cancelBtn.setKeyEquivalent('\033');
+
+    var okBtn = $.NSButton.alloc.initWithFrame($.NSMakeRect(winW - pad - 120, 12, 120, 32));
+    okBtn.setTitle('Sweep now');
+    okBtn.setBezelStyle($.NSBezelStyleRounded);
+    okBtn.setKeyEquivalent('\r');
+
+    win.contentView.addSubview(checkAllBtn);
+    win.contentView.addSubview(uncheckAllBtn);
+    win.contentView.addSubview(cancelBtn);
+    win.contentView.addSubview(okBtn);
+
+    var finished = false;
+    var cancelled = false;
+
+    var className = 'JanitorChooser' + Date.now();
+    ObjC.registerSubclass({
+      name: className,
+      methods: {
+        'ok:': {
+          types: ['void', ['id']],
+          implementation: function (sender) { finished = true; }
+        },
+        'cancel:': {
+          types: ['void', ['id']],
+          implementation: function (sender) { cancelled = true; finished = true; }
+        },
+        'checkAll:': {
+          types: ['void', ['id']],
+          implementation: function (sender) {
+            for (var i = 0; i < checks.length; i++) {
+              checks[i].setState($.NSControlStateValueOn);
+            }
+          }
+        },
+        'uncheckAll:': {
+          types: ['void', ['id']],
+          implementation: function (sender) {
+            for (var i = 0; i < checks.length; i++) {
+              checks[i].setState($.NSControlStateValueOff);
+            }
+          }
+        },
+        'windowShouldClose:': {
+          types: ['bool', ['id']],
+          implementation: function (sender) {
+            cancelled = true;
+            finished = true;
+            return true;
+          }
+        }
+      }
+    });
+
+    var del = $[className].alloc.init;
+    okBtn.setTarget(del);
+    okBtn.setAction('ok:');
+    cancelBtn.setTarget(del);
+    cancelBtn.setAction('cancel:');
+    checkAllBtn.setTarget(del);
+    checkAllBtn.setAction('checkAll:');
+    uncheckAllBtn.setTarget(del);
+    uncheckAllBtn.setAction('uncheckAll:');
+    win.setDelegate(del);
+
+    win.makeKeyAndOrderFront(null);
+    app.activateIgnoringOtherApps(true);
+
+    while (!finished) {
+      $.NSRunLoop.currentRunLoop.runUntilDate($.NSDate.dateWithTimeIntervalSinceNow(0.05));
+    }
+
+    win.orderOut(null);
+
+    if (cancelled) {
+      'CANCEL';
+    } else {
+      var picked = [];
+      for (var j = 0; j < checks.length; j++) {
+        if (checks[j].state == $.NSControlStateValueOn) {
+          picked.push(items[j].id);
+        }
+      }
+      if (picked.length === 0) {
+        '__EMPTY__';
+      } else {
+        picked.join('\n');
+      }
+    }
+  }
+}
+EOF

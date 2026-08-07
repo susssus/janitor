@@ -18,7 +18,8 @@ usage() {
  cat <<'EOF'
 janitor : Mac developer housekeeper
 
-Dev caches only. Never touches ~/Documents, ~/Downloads, media, or personal files.
+Disk cache cleanup with opt-in hogs. Never touches ~/Documents or ~/Downloads.
+Tiers: default · --deep · --brave (browsers/media) · --stupid (past-cache + brave).
 
 Usage:
  janitor clean [--dry-run] [--deep] [--brave] [--stupid] [--only id,id,...] [-v]

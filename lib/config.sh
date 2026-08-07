@@ -66,7 +66,7 @@ catalog_load() {
  continue
  fi
  case "$kind" in path|cmd) ;; *) catalog_warn "bad kind '$kind' for $id"; continue ;; esac
- case "${default:-on}" in on|off|brave) ;; *) default="on" ;; esac
+ case "${default:-on}" in on|off|brave|stupid) ;; *) default="on" ;; esac
  case "${mode:-remove}" in remove|contents) ;; *) mode="remove" ;; esac
  emoji="${emoji:-$HOG_EMOJI}"
  # ¶ → real newlines for educate paragraphs
@@ -249,6 +249,9 @@ hog_measure_path() {
  pub_cache) echo "$HOME/.pub-cache" ;;
  simctl) echo "$HOME/Library/Developer/CoreSimulator" ;;
  old_logs) echo "$HOME/Library/Logs" ;;
+ container_caches) echo "$HOME/Library/Containers" ;;
+ as_caches) echo "$HOME/Library/Application Support" ;;
+ docker_prune) echo "" ;;
  *) echo "" ;;
  esac
 }
@@ -318,10 +321,11 @@ hog_unlocked_by_deep() {
  return 0
 }
 
-# True if --brave/__PROT3__ unlocks this default=brave catalog hog
+# True if --brave unlocks this default=brave catalog hog
+# (--stupid is a superset and also unlocks brave hogs)
 hog_unlocked_by_brave() {
  local id="$1" i
- [[ "${BRAVE:-0}" -eq 1 ]] || return 1
+ [[ "${BRAVE:-0}" -eq 1 || "${STUPID:-0}" -eq 1 ]] || return 1
  i="$(task_index "$id" 2>/dev/null || true)"
  [[ -n "$i" ]] || return 1
  [[ "${JANITOR_TASK_CUSTOM[$i]}" == "0" ]] || return 1
@@ -329,12 +333,24 @@ hog_unlocked_by_brave() {
  return 0
 }
 
-# should_run id : enabled set (or deep/brave-unlocked) + not disabled + JANITOR_ONLY
+# True if --stupid unlocks this default=stupid catalog hog
+hog_unlocked_by_stupid() {
+ local id="$1" i
+ [[ "${STUPID:-0}" -eq 1 ]] || return 1
+ i="$(task_index "$id" 2>/dev/null || true)"
+ [[ -n "$i" ]] || return 1
+ [[ "${JANITOR_TASK_CUSTOM[$i]}" == "0" ]] || return 1
+ [[ "${JANITOR_TASK_DEFAULTS[$i]}" == "stupid" ]] || return 1
+ return 0
+}
+
+# should_run id : enabled set (or deep/brave/stupid-unlocked) + not disabled + JANITOR_ONLY
 should_run() {
  local id="$1"
  if ! hog_is_in_enabled_set "$id" \
  && ! hog_unlocked_by_deep "$id" \
- && ! hog_unlocked_by_brave "$id"; then
+ && ! hog_unlocked_by_brave "$id" \
+ && ! hog_unlocked_by_stupid "$id"; then
  return 1
  fi
  if task_is_disabled "$id"; then
@@ -353,9 +369,14 @@ skip_reason_for() {
  local id="$1"
  if ! hog_is_in_enabled_set "$id" \
  && ! hog_unlocked_by_deep "$id" \
- && ! hog_unlocked_by_brave "$id"; then
+ && ! hog_unlocked_by_brave "$id" \
+ && ! hog_unlocked_by_stupid "$id"; then
  local i
  i="$(task_index "$id" 2>/dev/null || true)"
+ if [[ -n "$i" && "${JANITOR_TASK_DEFAULTS[$i]}" == "stupid" ]]; then
+ echo "just stupid mode only (or adopt)"
+ return
+ fi
  if [[ -n "$i" && "${JANITOR_TASK_DEFAULTS[$i]}" == "brave" ]]; then
  echo "brave mode only (or adopt)"
  return
@@ -449,6 +470,8 @@ list_tasks() {
  state="disabled"
  elif hog_is_in_enabled_set "$id"; then
  state="enabled"
+ elif [[ "${JANITOR_TASK_DEFAULTS[$i]}" == "stupid" ]]; then
+ state="stupid"
  elif [[ "${JANITOR_TASK_DEFAULTS[$i]}" == "brave" ]]; then
  state="brave"
  else
@@ -573,6 +596,8 @@ cmd_hogs() {
  else
  state="enabled"
  fi
+ elif [[ "${JANITOR_TASK_DEFAULTS[$i]}" == "stupid" ]]; then
+ state="stupid"
  elif [[ "${JANITOR_TASK_DEFAULTS[$i]}" == "brave" ]]; then
  state="brave"
  else
@@ -581,11 +606,11 @@ cmd_hogs() {
  hog_row "$id" "$size" "$label" "$state"
  done
  echo
- echo "${C_DIM}Policy: never Documents or Downloads. Brave tier = browsers/media caches.${C_RESET}"
+ echo "${C_DIM}Policy: never Documents or Downloads. Brave = browser/media caches. Just stupid = one notch past.${C_RESET}"
  echo "${C_DIM}Educate: janitor educate <id> Adopt: janitor adopt <id>${C_RESET}"
 }
 
-# Discover: default-off / brave / disabled hogs that exist on disk
+# Discover: default-off / brave / stupid / disabled hogs that exist on disk
 cmd_discover() {
  local i id label size path because swipe found=0
  section "Discover hogs"
@@ -601,7 +626,9 @@ cmd_discover() {
  [[ "$kb" -gt 0 ]] || continue
  size="$(fmt_kb "$kb")"
  label="${JANITOR_TASK_LABELS[$i]}"
- if [[ "${JANITOR_TASK_DEFAULTS[$i]}" == "brave" ]]; then
+ if [[ "${JANITOR_TASK_DEFAULTS[$i]}" == "stupid" ]]; then
+ hog_row "$id" "$size" "$label" "stupid?"
+ elif [[ "${JANITOR_TASK_DEFAULTS[$i]}" == "brave" ]]; then
  hog_row "$id" "$size" "$label" "brave?"
  else
  hog_row "$id" "$size" "$label" "suggest"
@@ -617,7 +644,7 @@ cmd_discover() {
  echo " (no new hogs found; your enabled set covers what's on disk)"
  else
  echo
- echo "${C_DIM}Adopt: janitor adopt <id> · Wider sweep: janitor clean --brave${C_RESET}"
+ echo "${C_DIM}Adopt: janitor adopt <id> · Wider: janitor clean --brave · Past caches: janitor clean --stupid${C_RESET}"
  fi
 }
 

@@ -1,7 +1,7 @@
 # Janitor hog catalog
 # NEVER: Documents, Downloads. Brave still never touches those.
 # Fields: id|kind|path_or_cmd|mode|default|emoji|label|because|tradeoff|educate
-# default: on | off | brave
+# default: on | off | brave | stupid
 # because → UI: "Hogging because: …"
 # tradeoff → UI: "If you swipe: …"
 # educate → longer copy (≤3 short paragraphs); separate with ¶
@@ -53,3 +53,8 @@ canva_app|path|~/Library/Caches/com.canva.CanvaDesktop|remove|brave|{^oo^}|Canva
 stremio5|path|~/Library/Caches/com.westbridge.stremio5-mac|remove|brave|{^oo^}|Stremio5 cache|Stremio app cache / stream buffers on disk|streams may rebuffer; app settings stay|Stremio keeps stream/app cache under Library/Caches. That is the disk cost of smooth playback.¶Swiping can mean more buffering next session.¶Quit Stremio first for a clean clear.
 stremio|path|~/Library/Caches/stremio-server|contents|brave|{^oo^}|Stremio server cache|stremio-server stream cache under Library/Caches|streams may rebuffer; quit Stremio/server first|stremio-server caches stream data for playback. Large and regenerable.¶Quit the app/server before sweeping.¶Next watch rebuffers from scratch.
 stremio_support|path|~/Library/Application Support/stremio-server/stremio-cache|contents|brave|{^oo^}|Stremio Application Support cache|alternate stremio-server cache location|streams may rebuffer; quit Stremio/server first|Some installs keep stream cache under Application Support/stremio-server.¶Same tradeoff as other Stremio caches: space now, buffer later.¶Still never Documents/Downloads, only this narrow cache path.
+#
+# --- Just stupid (one notch past Library/Caches; still never Documents/Downloads) ---
+container_caches|cmd|container_caches|contents|stupid|{^oo^}|Sandboxed app caches|macOS app container caches under Library/Containers grow quietly|apps may rewarm sandboxed caches; settings/docs in the container stay|Only clears …/Containers/<app>/Data/Library/Caches contents.¶Never the container root, never Documents inside containers.¶Quit heavy apps first for a clean reclaim.
+as_caches|cmd|as_caches|contents|stupid|{^oo^}|Application Support Cache folders|Cache/Caches folders under Application Support pile up outside Library/Caches|apps may reload cached assets; whole app folders are never wiped|Finds only path leaves named Cache or Caches under ~/Library/Application Support.¶Never deletes a whole Application Support app directory.¶Still never Documents or Downloads.
+docker_prune|cmd|docker_prune|remove|stupid|{^oo^}|Docker prune|stopped containers, unused networks, dangling images, and build cache leftovers|Docker may need to redownload layers; running containers stay|Runs docker system prune -af --volumes=false plus builder prune when docker exists.¶Does not remove named volumes you still use (no --volumes).¶Skip if Docker Desktop is mid pull.

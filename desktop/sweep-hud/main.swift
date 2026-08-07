@@ -18,7 +18,7 @@ import Foundation
 // quit
 //
 // Events (Swift → bash):
-// start | start_deep | start_brave | cancel | sweep id1,id2,… | ok
+// start | start_deep | start_brave | start_stupid | cancel | sweep id1,id2,… | ok
 
 let sessionDir: String = {
  let args = CommandLine.arguments
@@ -165,7 +165,10 @@ final class Hud: NSObject, NSApplicationDelegate {
  let cardBg = NSColor(calibratedWhite: 0.16, alpha: 1)
 
  let winW: CGFloat = 620
- let winH: CGFloat = 520
+ let winH: CGFloat = 560
+
+ /// Welcome help tips keyed by NSButton.tag
+ var welcomeHelpBodies: [(title: String, body: String)] = []
 
  func applicationDidFinishLaunching(_ notification: Notification) {
  let screen = NSScreen.main?.visibleFrame ?? NSRect(x: 0, y: 0, width: 800, height: 600)
@@ -281,6 +284,18 @@ final class Hud: NSObject, NSApplicationDelegate {
  return b
  }
 
+ func makeHelpButton(frame: NSRect, tip: String, tag: Int) -> NSButton {
+ let b = NSButton(frame: frame)
+ b.title = "?"
+ b.bezelStyle = .circular
+ b.target = self
+ b.action = #selector(onWelcomeHelp(_:))
+ b.toolTip = tip
+ b.tag = tag
+ b.setButtonType(.momentaryPushIn)
+ return b
+ }
+
  func buildChrome() {
  broomLabel = label("(*^▽^*)", frame: NSRect(x: 0, y: winH - 100, width: winW, height: 70), size: 28)
  titleLabel = label("Janitor", frame: NSRect(x: 20, y: winH - 130, width: winW - 40, height: 28), size: 22)
@@ -297,46 +312,90 @@ final class Hud: NSObject, NSApplicationDelegate {
  welcomeBox = NSView(frame: NSRect(x: 0, y: 0, width: winW, height: winH - 170))
  let blurb = label(
  "Janitor clears caches to free disk space. It does not free RAM.\nQuit apps to free memory. Never Documents or Downloads.\nButtons below only assess. You pick what to clean next. Nothing deletes yet.",
- frame: NSRect(x: 28, y: 186, width: winW - 56, height: 62),
+ frame: NSRect(x: 28, y: 230, width: winW - 56, height: 62),
  size: 12,
  bold: false
  )
  blurb.textColor = NSColor(calibratedWhite: 0.7, alpha: 1)
 
+ let btnW: CGFloat = 280
+ let btnX = (winW - btnW) / 2
+ let helpX = btnX + btnW + 10
+ let helpW: CGFloat = 28
+
  let start = makeButton(
  "Start sweep",
- frame: NSRect(x: (winW - 300) / 2, y: 140, width: 300, height: 36),
+ frame: NSRect(x: btnX, y: 186, width: btnW, height: 36),
  action: #selector(onStart),
  accent: true
  )
- // No Return-key default on welcome: sibling buttons (deep/brave) would
- // briefly pulse this one orange when clicked. Scary and misleading.
+ // No Return-key default on welcome: sibling buttons would pulse this one orange.
  let deep = makeButton(
  "Start deep sweep",
- frame: NSRect(x: (winW - 300) / 2, y: 98, width: 300, height: 32),
+ frame: NSRect(x: btnX, y: 146, width: btnW, height: 32),
  action: #selector(onStartDeep)
  )
- let brave = makeButton(
- "Brave / Stupid sweep ?",
- frame: NSRect(x: (winW - 300) / 2, y: 58, width: 300, height: 32),
- action: #selector(onStartBrave)
- )
- brave.toolTip = """
- Wider disk sweep: browser & media caches (Chrome, Safari, Steam, Spotify, Discord, Stremio, …).
+
+ let braveTip = """
+ Wider disk sweep: browser & media caches (Chrome, Safari, Steam, Spotify, Discord, …).
 
  Still never touches Documents or Downloads.
  More buffering / slower first page loads possible after. That’s the tradeoff.
  Same as: janitor clean --brave
  """
+ let stupidTip = """
+ One notch past caches: sandboxed app container caches, Application Support Cache/Caches folders, and Docker prune.
+
+ Includes everything Brave unlocks, plus those past-cache regenerables.
+ Still never Documents or Downloads. Apps may feel colder; Docker may redownload layers.
+ Same as: janitor clean --stupid
+ """
+
+ welcomeHelpBodies = [
+ (
+ title: "Brave sweep",
+ body: braveTip
+ ),
+ (
+ title: "Just stupid",
+ body: stupidTip
+ ),
+ ]
+
+ let brave = makeButton(
+ "Brave sweep",
+ frame: NSRect(x: btnX, y: 106, width: btnW, height: 32),
+ action: #selector(onStartBrave)
+ )
+ let braveHelp = makeHelpButton(
+ frame: NSRect(x: helpX, y: 108, width: helpW, height: 28),
+ tip: braveTip,
+ tag: 0
+ )
+
+ let stupid = makeButton(
+ "Just stupid",
+ frame: NSRect(x: btnX, y: 66, width: btnW, height: 32),
+ action: #selector(onStartStupid)
+ )
+ let stupidHelp = makeHelpButton(
+ frame: NSRect(x: helpX, y: 68, width: helpW, height: 28),
+ tip: stupidTip,
+ tag: 1
+ )
+
  let cancel = makeButton(
  "Cancel",
- frame: NSRect(x: (winW - 120) / 2, y: 16, width: 120, height: 28),
+ frame: NSRect(x: (winW - 120) / 2, y: 20, width: 120, height: 28),
  action: #selector(onCancel)
  )
  welcomeBox.addSubview(blurb)
  welcomeBox.addSubview(start)
  welcomeBox.addSubview(deep)
  welcomeBox.addSubview(brave)
+ welcomeBox.addSubview(braveHelp)
+ welcomeBox.addSubview(stupid)
+ welcomeBox.addSubview(stupidHelp)
  welcomeBox.addSubview(cancel)
  contentRoot.addSubview(welcomeBox)
  welcomeBox.isHidden = true
@@ -743,8 +802,21 @@ final class Hud: NSObject, NSApplicationDelegate {
  @objc func onStart() { emit("start") }
  @objc func onStartDeep() { emit("start_deep") }
  @objc func onStartBrave() { emit("start_brave") }
+ @objc func onStartStupid() { emit("start_stupid") }
  @objc func onCancel() { emit("cancel") }
  @objc func onOK() { emit("ok") }
+
+ @objc func onWelcomeHelp(_ sender: NSButton) {
+ let i = sender.tag
+ guard i >= 0, i < welcomeHelpBodies.count else { return }
+ let tip = welcomeHelpBodies[i]
+ let alert = NSAlert()
+ alert.messageText = tip.title
+ alert.informativeText = tip.body
+ alert.alertStyle = .informational
+ alert.addButton(withTitle: "Got it")
+ alert.runModal()
+ }
 
  @objc func onEducate(_ sender: NSButton) {
  let i = sender.tag

@@ -21,8 +21,8 @@ janitor : Mac developer housekeeper
 Dev caches only. Never touches ~/Documents, ~/Downloads, media, or personal files.
 
 Usage:
- janitor clean [--dry-run] [--deep] [--brave|--stupid] [--only id,id,...] [-v]
- janitor desktop [--deep] [--brave]
+ janitor clean [--dry-run] [--deep] [--brave] [--stupid] [--only id,id,...] [-v]
+ janitor desktop [--deep] [--brave] [--stupid]
  janitor status
  janitor hogs
  janitor discover
@@ -40,11 +40,11 @@ Commands:
  desktop GUI: assess → check tasks (opt in) → clean
  status Disk, RAM, reclaimable hogs (one {^oo^} row each)
  hogs List catalog + custom hogs and state
- discover Suggest off/brave/disabled hogs present on disk
+ discover Suggest off/brave/stupid/disabled hogs present on disk
  educate Longer explanation for one hog, or: janitor educate ram
  adopt Opt into a catalog hog (saved in ~/.config/janitor/hogs)
  hog add Add a custom allowlisted cache path as a hog
- tasks List cleaners and enabled/disabled/off/brave state
+ tasks List cleaners and enabled/disabled/off/brave/stupid state
  disable Permanently opt out of a task (saved in config)
  enable Re-enable a previously disabled task
  log Show latest session log
@@ -53,8 +53,8 @@ Commands:
 Options:
  --dry-run Measure only; delete nothing
  --deep Include default-off deep hogs (e.g. ShipIt)
- --brave Wider sweep: browsers/media caches (alias: --stupid)
- --stupid Same as --brave
+ --brave Wider sweep: browsers/media caches
+ --stupid One notch past caches (includes --brave): container caches, Application Support Cache folders, Docker prune
  --only id,... Run only these task ids (after assess selection)
  -v, --verbose Show command output
 
@@ -73,6 +73,7 @@ Examples:
  janitor hog add ~/Library/Caches/my-tool
  janitor clean --dry-run
  janitor clean --brave --dry-run
+ janitor clean --stupid --dry-run
  janitor desktop
  janitor clean --only homebrew,npm,old_logs
 EOF
@@ -92,7 +93,7 @@ cmd_status() {
  section "Hogs (reclaimable disk)"
  report_sizes
  echo
- echo "${C_DIM}Policy: never Documents or Downloads. Brave tier = browsers/media caches.${C_RESET}"
+ echo "${C_DIM}Policy: never Documents or Downloads. Brave = browser/media caches. Just stupid = one notch past.${C_RESET}"
  echo "${C_DIM}Opt outs: ${JANITOR_DISABLED_FILE} · Hogs: ${JANITOR_HOGS_FILE}${C_RESET}"
  echo "${C_DIM}More: janitor educate ram${C_RESET}"
  local latest
@@ -140,12 +141,13 @@ cmd_log() {
 }
 
 cmd_clean() {
- local dry_run=0 verbose=0 deep=0 brave=0 only=""
+ local dry_run=0 verbose=0 deep=0 brave=0 stupid=0 only=""
  while [[ $# -gt 0 ]]; do
  case "$1" in
  --dry-run) dry_run=1 ;;
  --deep) deep=1 ;;
- --brave|--stupid) brave=1 ;;
+ --brave) brave=1 ;;
+ --stupid) stupid=1; brave=1 ;;
  --only)
  shift
  [[ $# -gt 0 ]] || die "--only needs a comma-separated id list"
@@ -165,8 +167,9 @@ cmd_clean() {
  VERBOSE=$verbose
  DEEP=$deep
  BRAVE=$brave
+ STUPID=$stupid
  JANITOR_ONLY="$only"
- export DRY_RUN VERBOSE DEEP BRAVE JANITOR_ONLY
+ export DRY_RUN VERBOSE DEEP BRAVE STUPID JANITOR_ONLY
 
  local df_before
  df_before="$(free_kb)"
@@ -181,8 +184,10 @@ cmd_clean() {
  if [[ "$DEEP" -eq 1 ]]; then
  log_echo "${C_CYAN}(deep profile enabled)${C_RESET}"
  fi
- if [[ "$BRAVE" -eq 1 ]]; then
- log_echo "${C_YELLOW}(brave/stupid profile: browsers & media caches; never Documents/Downloads)${C_RESET}"
+ if [[ "$STUPID" -eq 1 ]]; then
+ log_echo "${C_YELLOW}(just stupid profile: past-cache regenerables + brave; never Documents/Downloads)${C_RESET}"
+ elif [[ "$BRAVE" -eq 1 ]]; then
+ log_echo "${C_YELLOW}(brave profile: browsers & media caches; never Documents/Downloads)${C_RESET}"
  fi
  if [[ -n "$JANITOR_ONLY" ]]; then
  log_echo "${C_CYAN}(only: $JANITOR_ONLY)${C_RESET}"
@@ -213,11 +218,12 @@ cmd_clean() {
 }
 
 cmd_desktop() {
- local deep=0 brave=0
+ local deep=0 brave=0 stupid=0
  while [[ $# -gt 0 ]]; do
  case "$1" in
  --deep) deep=1 ;;
- --brave|--stupid) brave=1 ;;
+ --brave) brave=1 ;;
+ --stupid) stupid=1; brave=1 ;;
  -h|--help) usage; return 0 ;;
  *) die "unknown option: $1" ;;
  esac
@@ -228,6 +234,9 @@ cmd_desktop() {
  fi
  if [[ "$brave" -eq 1 ]]; then
  export JANITOR_DESKTOP_BRAVE=1
+ fi
+ if [[ "$stupid" -eq 1 ]]; then
+ export JANITOR_DESKTOP_STUPID=1
  fi
  exec "$JANITOR_HOME/bin/janitor-desktop"
 }

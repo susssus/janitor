@@ -317,6 +317,223 @@ clean_old_logs() {
  TOTAL_TASKS=$((TOTAL_TASKS + 1))
 }
 
+# List …/Containers/*/Data/Library/Caches directories (null-safe via newlines; paths rarely have newlines)
+list_container_cache_dirs() {
+ local root="$HOME/Library/Containers"
+ [[ -d "$root" ]] || return 0
+ find "$root" -type d -path '*/Data/Library/Caches' 2>/dev/null || true
+}
+
+list_as_cache_dirs() {
+ local root="$HOME/Library/Application Support"
+ [[ -d "$root" ]] || return 0
+ # Depth-limited: Cache/Caches leaves only (never whole AS apps)
+ find "$root" -type d \( -name Cache -o -name Caches \) 2>/dev/null || true
+}
+
+sum_dirs_kb() {
+ local total=0 kb d
+ for d in "$@"; do
+ [[ -d "$d" ]] || continue
+ kb="$(du_kb "$d")"
+ total=$((total + kb))
+ done
+ echo "$total"
+}
+
+clean_container_caches() {
+ local id="container_caches" label="Sandboxed app caches"
+ local measure="$HOME/Library/Containers"
+
+ if ! should_run "$id"; then
+  log_skip "$id" "$label" "$(skip_reason_for "$id")" "$measure"
+  return 0
+ fi
+
+ local dirs=() d
+ while IFS= read -r d; do
+  [[ -z "$d" ]] && continue
+  is_container_caches_path "$(abs_path "$d")" || continue
+  dirs+=("$d")
+ done < <(list_container_cache_dirs)
+
+ if [[ ${#dirs[@]} -eq 0 ]]; then
+  log_skip "$id" "$label" "no container caches found" "$measure"
+  return 0
+ fi
+
+ local estimate before after freed status ts
+ estimate="$(sum_dirs_kb "${dirs[@]}")"
+ ts="$(date -Iseconds 2>/dev/null || date)"
+ before="$estimate"
+
+ if [[ "${estimate:-0}" -le 0 ]]; then
+  log_skip "$id" "$label" "nothing reclaimable" "$measure"
+  return 0
+ fi
+
+ if [[ "${DRY_RUN:-0}" -eq 1 ]]; then
+  log_task dry "$label" "would free ~$(fmt_kb "$estimate") (${#dirs[@]} dirs)" "$measure"
+  log_line " path=$(abs_path "$measure") before_kb=$before after_kb=0 freed_kb=$estimate status=dry run dirs=${#dirs[@]}"
+  history_append "$ts" "$id" "$measure" "$before" 0 "$estimate" "dry run"
+  assess_append "$id" "$label" "$estimate" "dry run"
+  TOTAL_FREED_KB=$((TOTAL_FREED_KB + estimate))
+  TOTAL_TASKS=$((TOTAL_TASKS + 1))
+  return 0
+ fi
+
+ for d in "${dirs[@]}"; do
+  assert_safe_path "$d" || continue
+  find "$d" -mindepth 1 -maxdepth 1 -exec rm -rf {} + 2>/dev/null || true
+ done
+
+ after="$(sum_dirs_kb "${dirs[@]}")"
+ freed=$(( before - after ))
+ if [[ "$freed" -lt 0 ]]; then freed=0; fi
+ status="ok"
+ log_task ok "$label" "freed $(fmt_kb "$freed") (${#dirs[@]} dirs)" "$measure"
+ log_line " path=$(abs_path "$measure") before_kb=$before after_kb=$after freed_kb=$freed status=$status dirs=${#dirs[@]}"
+ history_append "$ts" "$id" "$measure" "$before" "$after" "$freed" "$status"
+ assess_append "$id" "$label" "$freed" "$status"
+ TOTAL_FREED_KB=$((TOTAL_FREED_KB + freed))
+ TOTAL_TASKS=$((TOTAL_TASKS + 1))
+}
+
+clean_as_caches() {
+ local id="as_caches" label="Application Support Cache folders"
+ local measure="$HOME/Library/Application Support"
+
+ if ! should_run "$id"; then
+  log_skip "$id" "$label" "$(skip_reason_for "$id")" "$measure"
+  return 0
+ fi
+
+ local dirs=() d
+ while IFS= read -r d; do
+  [[ -z "$d" ]] && continue
+  is_application_support_cache_path "$(abs_path "$d")" || continue
+  dirs+=("$d")
+ done < <(list_as_cache_dirs)
+
+ if [[ ${#dirs[@]} -eq 0 ]]; then
+  log_skip "$id" "$label" "no Application Support Cache folders" "$measure"
+  return 0
+ fi
+
+ local estimate before after freed status ts
+ estimate="$(sum_dirs_kb "${dirs[@]}")"
+ ts="$(date -Iseconds 2>/dev/null || date)"
+ before="$estimate"
+
+ if [[ "${estimate:-0}" -le 0 ]]; then
+  log_skip "$id" "$label" "nothing reclaimable" "$measure"
+  return 0
+ fi
+
+ if [[ "${DRY_RUN:-0}" -eq 1 ]]; then
+  log_task dry "$label" "would free ~$(fmt_kb "$estimate") (${#dirs[@]} dirs)" "$measure"
+  log_line " path=$(abs_path "$measure") before_kb=$before after_kb=0 freed_kb=$estimate status=dry run dirs=${#dirs[@]}"
+  history_append "$ts" "$id" "$measure" "$before" 0 "$estimate" "dry run"
+  assess_append "$id" "$label" "$estimate" "dry run"
+  TOTAL_FREED_KB=$((TOTAL_FREED_KB + estimate))
+  TOTAL_TASKS=$((TOTAL_TASKS + 1))
+  return 0
+ fi
+
+ for d in "${dirs[@]}"; do
+  assert_safe_path "$d" || continue
+  find "$d" -mindepth 1 -maxdepth 1 -exec rm -rf {} + 2>/dev/null || true
+ done
+
+ after="$(sum_dirs_kb "${dirs[@]}")"
+ freed=$(( before - after ))
+ if [[ "$freed" -lt 0 ]]; then freed=0; fi
+ status="ok"
+ log_task ok "$label" "freed $(fmt_kb "$freed") (${#dirs[@]} dirs)" "$measure"
+ log_line " path=$(abs_path "$measure") before_kb=$before after_kb=$after freed_kb=$freed status=$status dirs=${#dirs[@]}"
+ history_append "$ts" "$id" "$measure" "$before" "$after" "$freed" "$status"
+ assess_append "$id" "$label" "$freed" "$status"
+ TOTAL_FREED_KB=$((TOTAL_FREED_KB + freed))
+ TOTAL_TASKS=$((TOTAL_TASKS + 1))
+}
+
+# Parse docker system df reclaimable sizes → KB (best effort, portable awk)
+docker_reclaimable_estimate_kb() {
+ local out
+ out="$(docker system df 2>/dev/null || true)"
+ [[ -n "$out" ]] || { echo 0; return 0; }
+ printf '%s\n' "$out" | grep -oE '[0-9]+(\.[0-9]+)?(B|KB|MB|GB|TB)[[:space:]]*\(' | sed 's/[[:space:]]*(//' | awk '
+ {
+  n = $0 + 0
+  if ($0 ~ /TB$/) kb = n * 1024 * 1024 * 1024
+  else if ($0 ~ /GB$/) kb = n * 1024 * 1024
+  else if ($0 ~ /MB$/) kb = n * 1024
+  else if ($0 ~ /KB$/) kb = n
+  else kb = n / 1024
+  s += kb
+ }
+ END { printf "%d\n", s + 0 }
+ '
+}
+
+clean_docker_prune() {
+ local id="docker_prune" label="Docker prune"
+
+ if ! command -v docker >/dev/null 2>&1; then
+  log_skip "$id" "$label" "docker not found"
+  return 0
+ fi
+ if ! should_run "$id"; then
+  log_skip "$id" "$label" "$(skip_reason_for "$id")"
+  return 0
+ fi
+
+ local estimate freed status ts rc
+ estimate="$(docker_reclaimable_estimate_kb)"
+ ts="$(date -Iseconds 2>/dev/null || date)"
+
+ if [[ "${DRY_RUN:-0}" -eq 1 ]]; then
+  if [[ "${estimate:-0}" -le 0 ]]; then
+   log_skip "$id" "$label" "docker reports nothing reclaimable"
+   return 0
+  fi
+  log_task dry "$label" "would free ~$(fmt_kb "$estimate") (docker system prune)" "-"
+  log_line " path=- before_kb=$estimate after_kb=0 freed_kb=$estimate status=dry run cmd=docker system prune"
+  history_append "$ts" "$id" "-" "$estimate" 0 "$estimate" "dry run"
+  assess_append "$id" "$label" "$estimate" "dry run"
+  TOTAL_FREED_KB=$((TOTAL_FREED_KB + estimate))
+  TOTAL_TASKS=$((TOTAL_TASKS + 1))
+  return 0
+ fi
+
+ local before_est after_est
+ before_est="$estimate"
+ rc=0
+ if [[ "${VERBOSE:-0}" -eq 1 ]]; then
+  docker system prune -af || rc=$?
+  docker builder prune -af || true
+ else
+  docker system prune -af >/dev/null 2>&1 || rc=$?
+  docker builder prune -af >/dev/null 2>&1 || true
+ fi
+ after_est="$(docker_reclaimable_estimate_kb)"
+ freed=$(( before_est - after_est ))
+ if [[ "$freed" -lt 0 ]]; then freed=0; fi
+ # If estimate was 0 but prune ran, still report ok with 0 rather than lie
+ if [[ "$rc" -ne 0 && "$freed" -eq 0 ]]; then
+  log_task skip "$label" "docker prune failed (exit $rc)" "-"
+  history_append "$ts" "$id" "-" "$before_est" "$after_est" 0 "failed:$rc"
+  return 0
+ fi
+ status="ok"
+ log_task ok "$label" "freed $(fmt_kb "$freed")" "-"
+ log_line " path=- before_kb=$before_est after_kb=$after_est freed_kb=$freed status=$status exit=$rc"
+ history_append "$ts" "$id" "-" "$before_est" "$after_est" "$freed" "$status"
+ assess_append "$id" "$label" "$freed" "$status"
+ TOTAL_FREED_KB=$((TOTAL_FREED_KB + freed))
+ TOTAL_TASKS=$((TOTAL_TASKS + 1))
+}
+
 # Run one catalog/custom path hog via run_path_task
 clean_path_hog() {
  local i="$1"
@@ -338,6 +555,9 @@ clean_cmd_hog() {
  pub_cache) clean_pub_cache ;;
  simctl) clean_simctl ;;
  old_logs) clean_old_logs ;;
+ container_caches) clean_container_caches ;;
+ as_caches) clean_as_caches ;;
+ docker_prune) clean_docker_prune ;;
  *)
  log_skip "$id" "$(task_label "$id")" "no cmd cleaner"
  ;;
@@ -348,6 +568,7 @@ run_all_cleaners() {
  local i id kind
  local deep_banner=0
  local brave_banner=0
+ local stupid_banner=0
 
  for i in "${!JANITOR_TASK_IDS[@]}"; do
  id="${JANITOR_TASK_IDS[$i]}"
@@ -364,9 +585,15 @@ run_all_cleaners() {
  log_echo "${C_CYAN}${C_BOLD}── deep profile ──${C_RESET}"
  deep_banner=1
  fi
+ if hog_unlocked_by_stupid "$id" && [[ "$stupid_banner" -eq 0 ]]; then
+ log_echo ""
+ log_echo "${C_YELLOW}${C_BOLD}── just stupid profile ──${C_RESET}"
+ log_echo "${C_DIM}Past-cache regenerables (containers / AS Cache folders / Docker). Still never Documents or Downloads.${C_RESET}"
+ stupid_banner=1
+ fi
  if hog_unlocked_by_brave "$id" && [[ "$brave_banner" -eq 0 ]]; then
  log_echo ""
- log_echo "${C_YELLOW}${C_BOLD}── brave / stupid profile ──${C_RESET}"
+ log_echo "${C_YELLOW}${C_BOLD}── brave profile ──${C_RESET}"
  log_echo "${C_DIM}Wider caches (browsers/media). Still never Documents or Downloads.${C_RESET}"
  brave_banner=1
  fi

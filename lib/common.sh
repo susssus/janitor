@@ -35,6 +35,29 @@ janitor_allowlist_roots() {
  printf '%s\n' "${roots[@]}"
 }
 
+# Sandboxed app caches only: …/Containers/<id>/Data/Library/Caches[/…]
+is_container_caches_path() {
+ local resolved="$1"
+ local prefix="$HOME/Library/Containers/"
+ [[ "$resolved" == "$prefix"* ]] || return 1
+ local rest="${resolved#"$prefix"}"
+ # <bundleId>/Data/Library/Caches[…]
+ [[ "$rest" == */Data/Library/Caches || "$rest" == */Data/Library/Caches/* ]]
+}
+
+# Application Support cache leaves only (…/Cache or …/Caches), never whole apps
+is_application_support_cache_path() {
+ local resolved="$1"
+ local prefix="$HOME/Library/Application Support/"
+ [[ "$resolved" == "$prefix"* ]] || return 1
+ local rest="${resolved#"$prefix"}"
+ [[ -n "$rest" ]] || return 1
+ case "$rest" in
+ Cache|Caches|*/Cache|*/Caches|Cache/*|Caches/*|*/Cache/*|*/Caches/*) return 0 ;;
+ *) return 1 ;;
+ esac
+}
+
 die() {
  echo "janitor: $*" >&2
  exit 1
@@ -185,6 +208,12 @@ is_sacrosanct() {
 path_is_allowlisted() {
  local resolved="$1" root
  resolved="$(abs_path "$resolved")"
+ if is_container_caches_path "$resolved"; then
+ return 0
+ fi
+ if is_application_support_cache_path "$resolved"; then
+ return 0
+ fi
  while IFS= read -r root; do
  [[ -z "$root" ]] && continue
  root="$(abs_path "$root")"
@@ -230,7 +259,7 @@ log_init() {
  {
  echo "# janitor ${mode} $(date -Iseconds 2>/dev/null || date)"
  echo "# host=$(hostname -s 2>/dev/null || hostname) user=$USER"
- echo "# dry_run=${DRY_RUN:-0} deep=${DEEP:-0} brave=${BRAVE:-0} only=${JANITOR_ONLY:--}"
+ echo "# dry_run=${DRY_RUN:-0} deep=${DEEP:-0} brave=${BRAVE:-0} stupid=${STUPID:-0} only=${JANITOR_ONLY:--}"
  echo "#"
  } >>"$LOG_FILE"
  ln -sfn "$LOG_FILE" "$JANITOR_LOG_DIR/latest.log"

@@ -259,17 +259,19 @@ dbg "HUD=$JANITOR_HUD executable=$([[ -x $JANITOR_HUD ]] && echo yes || echo no)
 
 hud_start
 
-# Welcome is shown by HUD on launch. Wait for start / start_deep / start_brave / cancel.
+# Welcome is shown by HUD on launch. Wait for start / start_deep / start_brave / start_stupid / cancel.
 hud_next_event
 event="$HUD_EVENT"
 dbg "welcome event=$event"
 
 DEEP_FLAG=""
 BRAVE_FLAG=""
+STUPID_FLAG=""
 case "$event" in
- start) DEEP_FLAG=""; BRAVE_FLAG="" ;;
- start_deep) DEEP_FLAG="--deep"; BRAVE_FLAG="" ;;
- start_brave) DEEP_FLAG=""; BRAVE_FLAG="--brave" ;;
+ start) DEEP_FLAG=""; BRAVE_FLAG=""; STUPID_FLAG="" ;;
+ start_deep) DEEP_FLAG="--deep"; BRAVE_FLAG=""; STUPID_FLAG="" ;;
+ start_brave) DEEP_FLAG=""; BRAVE_FLAG="--brave"; STUPID_FLAG="" ;;
+ start_stupid) DEEP_FLAG=""; BRAVE_FLAG=""; STUPID_FLAG="--stupid" ;;
  cancel|"")
  dbg "cancelled at welcome"
  exit 0
@@ -280,21 +282,25 @@ case "$event" in
  ;;
 esac
 
-# CLI overrides from janitor desktop --brave / --deep
+# CLI overrides from janitor desktop --brave / --deep / --stupid
 if [[ "${JANITOR_DESKTOP_DEEP:-0}" == "1" || "${JANITOR_DESKTOP_DEEP:-}" == "1" ]]; then
  DEEP_FLAG="--deep"
 fi
 if [[ -n "${JANITOR_DESKTOP_BRAVE:-}" ]]; then
  BRAVE_FLAG="--brave"
 fi
+if [[ -n "${JANITOR_DESKTOP_STUPID:-}" ]]; then
+ STUPID_FLAG="--stupid"
+ BRAVE_FLAG=""
+fi
 
 # --- Assess ---
 hud_drain_events
 hud_cmd "phase assessing"
 assess_cap="$(mktemp "${TMPDIR:-/tmp}/janitor-assess.XXXXXX")"
-dbg "assess begin deep_flag=${DEEP_FLAG:-<none>} brave_flag=${BRAVE_FLAG:-<none>}"
+dbg "assess begin deep_flag=${DEEP_FLAG:-<none>} brave_flag=${BRAVE_FLAG:-<none>} stupid_flag=${STUPID_FLAG:-<none>}"
 # shellcheck disable=SC2086
-stream_to_hud "$assess_cap" "$JANITOR_BIN" clean --dry-run $DEEP_FLAG $BRAVE_FLAG || true
+stream_to_hud "$assess_cap" "$JANITOR_BIN" clean --dry-run $DEEP_FLAG $BRAVE_FLAG $STUPID_FLAG || true
 dbg "assess done"
 assess_log="$("$JANITOR_BIN" log --path 2>/dev/null || true)"
 freed_line="$(grep -E '^Freed \(measured\):' "$assess_cap" 2>/dev/null | tail -1 || true)"
@@ -328,7 +334,7 @@ while true; do
  event="$HUD_EVENT"
  dbg "choose event=$event"
  case "$event" in
- start|start_deep|start_brave)
+ start|start_deep|start_brave|start_stupid)
  dbg "ignoring stale welcome event during choose"
  continue
  ;;
@@ -356,7 +362,7 @@ hud_cmd "phase sweeping"
 clean_cap="$(mktemp "${TMPDIR:-/tmp}/janitor-clean.XXXXXX")"
 dbg "clean begin only=$selected"
 # shellcheck disable=SC2086
-stream_to_hud "$clean_cap" "$JANITOR_BIN" clean $DEEP_FLAG $BRAVE_FLAG --only "$selected" || true
+stream_to_hud "$clean_cap" "$JANITOR_BIN" clean $DEEP_FLAG $BRAVE_FLAG $STUPID_FLAG --only "$selected" || true
 dbg "clean done"
 clean_log="$("$JANITOR_BIN" log --path 2>/dev/null || true)"
 

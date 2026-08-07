@@ -8,16 +8,16 @@ Mac **developer** housekeeper. Reclaims **disk** from known tool caches and rege
 
 Each reclaimable target is a **hog** (`{^oo^}`) with **Hogging because:** / **If you swipe:** blurbs and optional **📖** educate copy.
 
-## Tiers
+## Tiers (four levels of housekeeping)
 
 | Tier | Flag / button | What it unlocks |
 |------|----------------|-----------------|
-| Default | Start sweep | Dev + AI desktop caches (Homebrew, npm, Gradle, Xcode DerivedData, Cursor, ChatGPT, …) |
-| Deep | `--deep` / Start deep sweep | Default-off leftovers (e.g. Claude ShipIt) |
-| Brave | `--brave` / Brave sweep | Browser & media caches (Chrome, Safari, Steam, Spotify, Discord, …) |
-| Just stupid | `--stupid` / Just stupid | Superset of Brave, plus sandboxed `Containers/…/Caches`, Application Support `Cache`/`Caches` folders, Docker prune |
+| 1. Start sweep | `janitor clean` / **Start sweep** | Dev + AI desktop caches (Homebrew, npm, Gradle, Xcode DerivedData, Cursor, ChatGPT, …) |
+| 2. Deep | `--deep` / **Start deep sweep** | Default plus default-off leftovers (e.g. Claude ShipIt) |
+| 3. Brave | `--brave` / **Brave sweep** | Browser & media caches (Chrome, Safari, Steam, Spotify, Discord, …) |
+| 4. Just stupid | `--stupid` / **Just stupid** | Superset of Brave, plus sandboxed `Containers/…/Caches`, Application Support `Cache`/`Caches` folders, Docker prune |
 
-Desktop: help **`?`** sits to the **right** of Brave / Just stupid (hover tip + click alert; never starts a sweep). Nothing deletes until you check hogs and hit **Sweep now**.
+Desktop: each of the four tier buttons has a help **`?`** on the **right** (hover tip + click alert; never starts a sweep). Nothing deletes until you check hogs and hit **Sweep now**.
 
 ## Commands
 

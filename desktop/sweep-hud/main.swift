@@ -323,19 +323,19 @@ final class Hud: NSObject, NSApplicationDelegate {
  let helpX = btnX + btnW + 10
  let helpW: CGFloat = 28
 
- let start = makeButton(
- "Start sweep",
- frame: NSRect(x: btnX, y: 186, width: btnW, height: 36),
- action: #selector(onStart),
- accent: true
- )
- // No Return-key default on welcome: sibling buttons would pulse this one orange.
- let deep = makeButton(
- "Start deep sweep",
- frame: NSRect(x: btnX, y: 146, width: btnW, height: 32),
- action: #selector(onStartDeep)
- )
+ let startTip = """
+ Default housekeeping: developer and AI desktop caches (Homebrew, npm, Gradle, Xcode DerivedData, Cursor, ChatGPT, …).
 
+ Assess only first. You pick which hogs to clean next. Nothing deletes yet.
+ Still never Documents or Downloads.
+ Same as: janitor clean
+ """
+ let deepTip = """
+ Default sweep plus default-off deep leftovers (e.g. Claude ShipIt updater cache).
+
+ Still regenerable junk only. Still never Documents or Downloads.
+ Same as: janitor clean --deep
+ """
  let braveTip = """
  Wider disk sweep: browser & media caches (Chrome, Safari, Steam, Spotify, Discord, …).
 
@@ -352,15 +352,35 @@ final class Hud: NSObject, NSApplicationDelegate {
  """
 
  welcomeHelpBodies = [
- (
- title: "Brave sweep",
- body: braveTip
- ),
- (
- title: "Just stupid",
- body: stupidTip
- ),
+ (title: "Start sweep", body: startTip),
+ (title: "Start deep sweep", body: deepTip),
+ (title: "Brave sweep", body: braveTip),
+ (title: "Just stupid", body: stupidTip),
  ]
+
+ let start = makeButton(
+ "Start sweep",
+ frame: NSRect(x: btnX, y: 186, width: btnW, height: 36),
+ action: #selector(onStart),
+ accent: true
+ )
+ // No Return-key default on welcome: sibling buttons would pulse this one orange.
+ let startHelp = makeHelpButton(
+ frame: NSRect(x: helpX, y: 190, width: helpW, height: 28),
+ tip: startTip,
+ tag: 0
+ )
+
+ let deep = makeButton(
+ "Start deep sweep",
+ frame: NSRect(x: btnX, y: 146, width: btnW, height: 32),
+ action: #selector(onStartDeep)
+ )
+ let deepHelp = makeHelpButton(
+ frame: NSRect(x: helpX, y: 148, width: helpW, height: 28),
+ tip: deepTip,
+ tag: 1
+ )
 
  let brave = makeButton(
  "Brave sweep",
@@ -370,7 +390,7 @@ final class Hud: NSObject, NSApplicationDelegate {
  let braveHelp = makeHelpButton(
  frame: NSRect(x: helpX, y: 108, width: helpW, height: 28),
  tip: braveTip,
- tag: 0
+ tag: 2
  )
 
  let stupid = makeButton(
@@ -381,7 +401,7 @@ final class Hud: NSObject, NSApplicationDelegate {
  let stupidHelp = makeHelpButton(
  frame: NSRect(x: helpX, y: 68, width: helpW, height: 28),
  tip: stupidTip,
- tag: 1
+ tag: 3
  )
 
  let cancel = makeButton(
@@ -391,7 +411,9 @@ final class Hud: NSObject, NSApplicationDelegate {
  )
  welcomeBox.addSubview(blurb)
  welcomeBox.addSubview(start)
+ welcomeBox.addSubview(startHelp)
  welcomeBox.addSubview(deep)
+ welcomeBox.addSubview(deepHelp)
  welcomeBox.addSubview(brave)
  welcomeBox.addSubview(braveHelp)
  welcomeBox.addSubview(stupid)

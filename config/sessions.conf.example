@@ -1,0 +1,25 @@
+# Janitor : Cowork sessions sweeper settings
+# Lives at: ~/.config/janitor/sessions.conf   (KEY=value; parsed, never sourced)
+#
+# Task sandboxes untouched this many days are stale (newest per conversation always kept)
+SANDBOX_MAX_AGE_DAYS=14
+#
+# /sessions fill inside the VM (exact from probe, else upper bound from sessiondata.img)
+VM_WARN_PCT=80
+VM_CRIT_PCT=92
+#
+# VM root image (rootfs.img) size on disk
+ROOTFS_WARN_GB=12
+ROOTFS_CRIT_GB=18
+#
+# Mac free space
+HOST_FREE_WARN_GB=20
+HOST_FREE_CRIT_GB=8
+#
+# Optional in-VM probe output (see docs/sessions-sweeper.md); ignored when older than PROBE_MAX_AGE_H
+PROBE_FILE=~/Claude/janitor/vm-df.jsonl
+PROBE_MAX_AGE_H=36
+#
+# Only if Claude desktop moves its data
+# CLAUDE_SUPPORT=~/Library/Application Support/Claude
+# CLAUDE_PROC=Claude

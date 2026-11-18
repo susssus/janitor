@@ -31,6 +31,10 @@ report_sizes() {
  "$HOME/Library/Containers/com.docker.docker"
  status_add_hog "_report_android_sdk" "Android SDK tree (report only)" \
  "$HOME/Library/Android"
+ status_add_hog "_report_cowork_sessions" "Cowork sessions (report only; see janitor sessions)" \
+ "$JANITOR_CLAUDE_SUPPORT/local-agent-mode-sessions"
+ status_add_hog "_report_cowork_vm" "Cowork VM bundle (report only; see janitor sessions vm)" \
+ "$JANITOR_CLAUDE_SUPPORT/vm_bundles"
 
  if [[ ${#STATUS_ROWS[@]} -eq 0 ]]; then
  echo " (no hogs found)"
@@ -327,8 +331,15 @@ list_container_cache_dirs() {
 list_as_cache_dirs() {
  local root="$HOME/Library/Application Support"
  [[ -d "$root" ]] || return 0
- # Depth-limited: Cache/Caches leaves only (never whole AS apps)
- find "$root" -type d \( -name Cache -o -name Caches \) 2>/dev/null || true
+ # Depth-limited: Cache/Caches leaves only (never whole AS apps).
+ # Skip Cowork session/VM trees: a Cache folder in there belongs to a live
+ # session, not to an app cache (lib/sessions.sh owns that tree).
+ local d
+ while IFS= read -r d; do
+ [[ -z "$d" ]] && continue
+ is_cowork_tree_path "$(abs_path "$d")" && continue
+ printf '%s\n' "$d"
+ done < <(find "$root" -type d \( -name Cache -o -name Caches \) 2>/dev/null || true)
 }
 
 sum_dirs_kb() {
@@ -558,6 +569,7 @@ clean_cmd_hog() {
  container_caches) clean_container_caches ;;
  as_caches) clean_as_caches ;;
  docker_prune) clean_docker_prune ;;
+ cowork_sandboxes) clean_cowork_sandboxes ;;
  *)
  log_skip "$id" "$(task_label "$id")" "no cmd cleaner"
  ;;

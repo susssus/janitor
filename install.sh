@@ -6,6 +6,8 @@ ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 BIN_DIR="${HOME}/bin"
 PLIST_SRC="$ROOT/launchd/com.susssus.janitor.plist"
 PLIST_DST="${HOME}/Library/LaunchAgents/com.susssus.janitor.plist"
+SESSIONS_PLIST_SRC="$ROOT/launchd/com.susssus.janitor.sessions.plist"
+SESSIONS_PLIST_DST="${HOME}/Library/LaunchAgents/com.susssus.janitor.sessions.plist"
 LOG_DIR="${HOME}/Library/Logs/janitor"
 DESKTOP_APP="${HOME}/Desktop/Janitor.app"
 
@@ -56,10 +58,12 @@ build_launchd_path() {
 }
 
 schedule=0
+schedule_sessions=0
 desktop=0
 for arg in "$@"; do
   case "$arg" in
     --schedule) schedule=1 ;;
+    --schedule-sessions) schedule_sessions=1 ;;
     --desktop) desktop=1 ;;
   esac
 done
@@ -82,6 +86,25 @@ else
   echo "  $0 --schedule"
 fi
 
+if [[ "$schedule_sessions" -eq 1 ]]; then
+  LAUNCHD_PATH="$(build_launchd_path)"
+  sed \
+    -e "s|__JANITOR_BIN__|$BIN_DIR/janitor|g" \
+    -e "s|__LOG_DIR__|$LOG_DIR|g" \
+    -e "s|__HOME__|$HOME|g" \
+    -e "s|__PATH__|$LAUNCHD_PATH|g" \
+    "$SESSIONS_PLIST_SRC" > "$SESSIONS_PLIST_DST"
+
+  launchctl unload "$SESSIONS_PLIST_DST" 2>/dev/null || true
+  launchctl load "$SESSIONS_PLIST_DST"
+  echo "Scheduled: Cowork sessions check daily 13:17 (LaunchAgent $SESSIONS_PLIST_DST)"
+  echo "  Sweeps only after: janitor adopt cowork_sandboxes (first sweep is a dry run)"
+else
+  echo
+  echo "Optional daily Cowork sessions sweep + VM space check:"
+  echo "  $0 --schedule-sessions"
+fi
+
 if [[ "$desktop" -eq 1 ]]; then
   "$ROOT/desktop/build-app.sh" "$ROOT/desktop/Janitor.app"
   rm -rf "$DESKTOP_APP"
@@ -102,3 +125,4 @@ echo "  janitor status"
 echo "  janitor clean --dry-run"
 echo "  janitor desktop"
 echo "  janitor log"
+echo "  janitor sessions"

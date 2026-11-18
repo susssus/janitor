@@ -1,0 +1,43 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>Label</key>
+  <string>com.susssus.janitor.sessions</string>
+
+  <!-- Cowork sessions: sweep stale task sandboxes (only if adopted),
+       then check VM space and notify on warn/critical. Never resets the VM. -->
+  <key>ProgramArguments</key>
+  <array>
+    <string>__JANITOR_BIN__</string>
+    <string>sessions</string>
+    <string>sweep</string>
+    <string>--scheduled</string>
+  </array>
+
+  <key>EnvironmentVariables</key>
+  <dict>
+    <key>PATH</key>
+    <string>__PATH__</string>
+    <key>HOME</key>
+    <string>__HOME__</string>
+  </dict>
+
+  <!-- Daily 13:17 local time. Missed runs (Mac asleep) fire on wake. -->
+  <key>StartCalendarInterval</key>
+  <dict>
+    <key>Hour</key>
+    <integer>13</integer>
+    <key>Minute</key>
+    <integer>17</integer>
+  </dict>
+
+  <key>WorkingDirectory</key>
+  <string>__HOME__</string>
+
+  <key>StandardOutPath</key>
+  <string>__LOG_DIR__/sessions.out.log</string>
+  <key>StandardErrorPath</key>
+  <string>__LOG_DIR__/sessions.err.log</string>
+</dict>
+</plist>

@@ -252,6 +252,8 @@ hog_measure_path() {
  container_caches) echo "$HOME/Library/Containers" ;;
  as_caches) echo "$HOME/Library/Application Support" ;;
  docker_prune) echo "" ;;
+ # Whole sessions folder is not the reclaim; sessions.sh measures stale sandboxes
+ cowork_sandboxes) echo "" ;;
  *) echo "" ;;
  esac
 }

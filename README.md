@@ -19,6 +19,26 @@ Each reclaimable target is a **hog** (`{^oo^}`) with **Hogging because:** / **If
 
 Desktop: help **`?`** sits to the **right** of Brave / Just stupid (hover tip + click alert; never starts a sweep). Nothing deletes until you check hogs and hit **Sweep now**.
 
+## Cowork sessions (`janitor sessions`)
+
+Claude desktop's Cowork leaves a `local_<id>` task sandbox behind for every task run (`~/Library/Application Support/Claude/local-agent-mode-sessions/…`), and its VM disk images only grow. That's session state, not cache, so it has its own narrow allowlist and gates:
+
+- never while Claude is running
+- only `…/<session>/<conversation>/local_<id>` folders untouched for 14+ days, always keeping the newest per conversation
+- unexpected folder layout → refuse everything
+- first sweep on a Mac is a dry run
+- VM reset is interactive only (`vm-reset`), never scheduled
+
+```bash
+janitor sessions                 # read-only inspect
+janitor sessions sweep --dry-run
+janitor sessions vm              # exit 0 ok / 1 warn / 2 critical
+janitor adopt cowork_sandboxes   # opt in for scheduled sweeps
+./install.sh --schedule-sessions # daily sweep + VM check, notifies on warn
+```
+
+Config: `~/.config/janitor/sessions.conf` ([example](config/sessions.conf.example)). Design: [`docs/sessions-sweeper.md`](docs/sessions-sweeper.md).
+
 ## Commands
 
 ```bash
@@ -37,6 +57,7 @@ janitor tasks
 janitor disable playwright
 janitor enable playwright
 janitor log [--path]
+janitor sessions [inspect|sweep|vm|vm-reset]
 ```
 
 Catalog: [`config/hogs.catalog`](config/hogs.catalog).  
@@ -49,6 +70,7 @@ Logs: `~/Library/Logs/janitor/`.
 ./install.sh
 ./install.sh --desktop    # ~/Desktop/Janitor.app
 ./install.sh --schedule   # optional weekly LaunchAgent
+./install.sh --schedule-sessions   # optional daily Cowork sessions sweep + VM check
 ```
 
 Put `~/bin` on your `PATH` if needed.
@@ -60,7 +82,7 @@ bin/janitor                 # CLI
 bin/janitor-desktop         # sweeper box orchestrator
 bin/janitor-sweep-hud       # Swift HUD launcher
 desktop/sweep-hud/          # HUD source
-lib/{common,config,cleaners}.sh
+lib/{common,config,cleaners,sessions}.sh
 config/hogs.catalog
 install.sh
 ```

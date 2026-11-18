@@ -193,6 +193,51 @@ abs_path() {
  fi
 }
 
+# --- Claude desktop / Cowork (narrow, session-state allowlist) ---
+# Not cache: these are app session state, so they get their own allowlist
+# and their own gates (see lib/sessions.sh). Never the whole Claude folder.
+JANITOR_CLAUDE_SUPPORT="${JANITOR_CLAUDE_SUPPORT:-$HOME/Library/Application Support/Claude}"
+
+# True for a basename like local_<uuid>
+is_cowork_sandbox_name() {
+ [[ "$1" =~ ^local_[0-9A-Fa-f-]{8,}$ ]]
+}
+
+# True if path is under Cowork's session/VM trees (used to keep other
+# sweepers, e.g. as_caches, from wandering into live session state)
+is_cowork_tree_path() {
+ local resolved="$1" root
+ root="$(abs_path "$JANITOR_CLAUDE_SUPPORT")"
+ [[ "$resolved" == "$root/local-agent-mode-sessions" \
+ || "$resolved" == "$root/local-agent-mode-sessions/"* \
+ || "$resolved" == "$root/vm_bundles" \
+ || "$resolved" == "$root/vm_bundles/"* ]]
+}
+
+# Only these Cowork paths may ever be deleted:
+#  local-agent-mode-sessions/<session>/<conversation>/local_<uuid>  (exact depth)
+#  vm_bundles/claudevm.bundle/sessiondata.img                        (vm-reset only)
+#  vm_bundles                                                        (vm-reset --full only)
+is_cowork_sweepable_path() {
+ local resolved="$1" root rest a b c extra
+ root="$(abs_path "$JANITOR_CLAUDE_SUPPORT")"
+ if [[ "$resolved" == "$root/local-agent-mode-sessions/"* ]]; then
+ rest="${resolved#"$root/local-agent-mode-sessions/"}"
+ IFS='/' read -r a b c extra <<<"$rest"
+ [[ -n "$a" && -n "$b" && -n "$c" && -z "$extra" ]] || return 1
+ [[ "$a" != .* && "$b" != .* ]] || return 1
+ is_cowork_sandbox_name "$c"
+ return
+ fi
+ if [[ "${JANITOR_VM_RESET:-0}" == "1" ]]; then
+ [[ "$resolved" == "$root/vm_bundles/claudevm.bundle/sessiondata.img" ]] && return 0
+ if [[ "${JANITOR_VM_RESET_FULL:-0}" == "1" && "$resolved" == "$root/vm_bundles" ]]; then
+ return 0
+ fi
+ fi
+ return 1
+}
+
 # Return 0 if path is under a sacrosanct directory
 is_sacrosanct() {
  local resolved="$1" forbidden
@@ -208,6 +253,11 @@ is_sacrosanct() {
 path_is_allowlisted() {
  local resolved="$1" root
  resolved="$(abs_path "$resolved")"
+ # Cowork trees: only the narrow session allowlist applies, nothing broader
+ if is_cowork_tree_path "$resolved"; then
+ is_cowork_sweepable_path "$resolved"
+ return
+ fi
  if is_container_caches_path "$resolved"; then
  return 0
  fi
@@ -258,7 +308,7 @@ log_init() {
  fi
  {
  echo "# janitor ${mode} $(date -Iseconds 2>/dev/null || date)"
- echo "# host=$(hostname -s 2>/dev/null || hostname) user=$USER"
+ echo "# host=$(hostname -s 2>/dev/null || hostname) user=${USER:-$(id -un 2>/dev/null)}"
  echo "# dry_run=${DRY_RUN:-0} deep=${DEEP:-0} brave=${BRAVE:-0} stupid=${STUPID:-0} only=${JANITOR_ONLY:--}"
  echo "#"
  } >>"$LOG_FILE"

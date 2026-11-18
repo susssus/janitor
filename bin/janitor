@@ -9,6 +9,8 @@ source "$JANITOR_HOME/lib/common.sh"
 source "$JANITOR_HOME/lib/config.sh"
 # shellcheck source=../lib/cleaners.sh
 source "$JANITOR_HOME/lib/cleaners.sh"
+# shellcheck source=../lib/sessions.sh
+source "$JANITOR_HOME/lib/sessions.sh"
 
 janitor_augment_path
 config_ensure
@@ -34,6 +36,7 @@ Usage:
  janitor disable <task-id>
  janitor enable <task-id>
  janitor log [--path]
+ janitor sessions [inspect|sweep|vm|vm-reset]
  janitor help
 
 Commands:
@@ -49,6 +52,7 @@ Commands:
  disable Permanently opt out of a task (saved in config)
  enable Re-enable a previously disabled task
  log Show latest session log
+ sessions Claude desktop Cowork: stale task sandboxes + VM disk space (janitor sessions help)
  help Show this help
 
 Options:
@@ -300,6 +304,7 @@ main() {
  disable) cmd_disable "$@" ;;
  enable) cmd_enable "$@" ;;
  log) cmd_log "$@" ;;
+ sessions) cmd_sessions "$@" ;;
  help|-h|--help) usage ;;
  *) die "unknown command: $cmd (try: janitor help)" ;;
  esac
